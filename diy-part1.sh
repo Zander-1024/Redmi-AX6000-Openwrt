@@ -20,13 +20,16 @@
 sed -i '$a src-git mosdns https://github.com/sbwml/luci-app-mosdns' feeds.conf.default
 sed -i '$a src-git kenzo https://github.com/kenzok8/openwrt-packages' feeds.conf.default
 sed -i '$a src-git small https://github.com/kenzok8/small' feeds.conf.default
+sed -i '$a src-git unblockneteasemusic https://github.com/UnblockNeteaseMusic/luci-app-unblockneteasemusic' feeds.conf.default
 
 ./scripts/feeds update -a
 ./scripts/feeds install -a -f -p kenzo
 ./scripts/feeds install -a -f -p small
 
+./scripts/feeds install -f -p unblockneteasemusic luci-app-unblockneteasemusic
+
 ./scripts/feeds uninstall luci-app-mosdns mosdns v2ray-geodata
-./scripts/feeds install -f -p mosdns mosdns luci-app-mosdns
+./scripts/feeds install -f -p mosdns luci-app-mosdns
 find ./ -name v2ray-geodata | xargs rm -rf
 git clone https://github.com/sbwml/v2ray-geodata package/v2ray-geodata
 svn export https://github.com/immortalwrt/luci/branches/openwrt-21.02/applications/luci-app-vlmcsd package/luci-app-vlmcsd
