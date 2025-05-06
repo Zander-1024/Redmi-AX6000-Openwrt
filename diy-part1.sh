@@ -24,7 +24,7 @@ rm -rf feeds/packages/net/{alist,adguardhome,mosdns,xray*,v2ray*,v2ray*,sing*,sm
 rm -rf feeds/packages/utils/v2dat
 rm -rf feeds/packages/lang/golang
 git clone https://github.com/kenzok8/golang feeds/packages/lang/golang
-# ./scripts/feeds install -a 
+./scripts/feeds install -a 
 
 
 # svn export https://github.com/immortalwrt/luci/branches/openwrt-24.10/applications/luci-app-vlmcsd package/luci-app-vlmcsd
