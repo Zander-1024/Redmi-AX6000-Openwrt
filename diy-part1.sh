@@ -1,42 +1,68 @@
 #!/bin/bash
-#
-# Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
-#
-# https://github.com/P3TERX/Actions-OpenWrt
-# File name: diy-part1.sh
-# Description: OpenWrt DIY script part 1 (Before Update feeds)
-#
+# Run from the locked OpenWrt source tree before loading the build config.
+set -euo pipefail
 
-# Uncomment a feed source
-#sed -i 's/^#\(.*helloworld\)/\1/' feeds.conf.default
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=sources.lock
+. "$SCRIPT_DIR/sources.lock"
 
-# Add a feed source
-#echo 'src-git helloworld https://github.com/fw876/helloworld' >>feeds.conf.default
-#echo 'src-git passwall https://github.com/xiaorouji/openwrt-passwall' >>feeds.conf.default
+[ "$(git rev-parse HEAD)" = "$OPENWRT_COMMIT" ] || {
+    echo "OpenWrt checkout does not match sources.lock" >&2
+    exit 1
+}
 
+# Rebuild from the release's own pinned feeds, not a second hand-maintained list.
+# This also makes repeated execution independent of previously added feed lines.
+feeds_tmp=$(mktemp)
+recipe_tmp=$(mktemp)
+trap 'rm -f "$feeds_tmp" "$recipe_tmp"' EXIT
+{
+    printf 'src-git passwall_packages %s^%s\n' "$PASSWALL_PACKAGES_URL" "$PASSWALL_PACKAGES_COMMIT"
+    printf 'src-git passwall2 %s^%s\n' "$PASSWALL2_URL" "$PASSWALL2_COMMIT"
+    printf 'src-git mosdns %s^%s\n' "$MOSDNS_URL" "$MOSDNS_COMMIT"
+    git show "$OPENWRT_COMMIT:feeds.conf.default"
+} > "$feeds_tmp"
+mv "$feeds_tmp" feeds.conf.default
 
-./scripts/feeds update -a && ./scripts/feeds install -a
-sed -i '$a src-git mosdns https://github.com/sbwml/luci-app-mosdns' feeds.conf.default
-sed -i '$a src-git kenzo https://github.com/kenzok8/openwrt-packages' feeds.conf.default
-sed -i '$a src-git small https://github.com/kenzok8/small' feeds.conf.default
-rm -rf feeds/packages/lang/golang
-git clone https://github.com/kenzok8/golang feeds/packages/lang/golang
+# Argon 3.x includes its settings UI; do not add luci-app-argon-config.
+if [ ! -e package/luci-theme-argon ]; then
+    git init -q package/luci-theme-argon
+    git -C package/luci-theme-argon remote add origin "$ARGON_URL"
+    git -C package/luci-theme-argon fetch --depth=1 origin "$ARGON_COMMIT"
+    git -C package/luci-theme-argon checkout --detach FETCH_HEAD
+fi
+[ "$(git -C package/luci-theme-argon rev-parse HEAD)" = "$ARGON_COMMIT" ] || {
+    echo "Argon checkout does not match sources.lock" >&2
+    exit 1
+}
 
 ./scripts/feeds update -a
-./scripts/feeds install -a -f -p kenzo
-./scripts/feeds install -a -f -p small
+for source in passwall_packages passwall2 mosdns; do
+    case "$source" in
+        passwall_packages) expected=$PASSWALL_PACKAGES_COMMIT ;;
+        passwall2) expected=$PASSWALL2_COMMIT ;;
+        mosdns) expected=$MOSDNS_COMMIT ;;
+    esac
+    [ "$(git -C "feeds/$source" rev-parse HEAD)" = "$expected" ] || {
+        echo "Unexpected revision for $source" >&2
+        exit 1
+    }
+done
 
-./scripts/feeds uninstall luci-app-mosdns mosdns v2ray-geodata
-./scripts/feeds install -f -p mosdns mosdns luci-app-mosdns
-find ./ -name v2ray-geodata | xargs rm -rf
-git clone https://github.com/sbwml/v2ray-geodata package/v2ray-geodata
-
-
-# svn export https://github.com/immortalwrt/luci/branches/openwrt-24.10/applications/luci-app-vlmcsd package/luci-app-vlmcsd
-# svn export https://github.com/immortalwrt/packages/branches/openwrt-24.10/net/vlmcsd  package/vlmcsd
-
-sed -i 's#../../luci.mk#$(TOPDIR)/feeds/luci/luci.mk#g' ./package/*/Makefile
-./scripts/feeds update -i && ./scripts/feeds install -a
+# Xray 26.10.21 requires Go 1.27. Keep the official Go feed and change only
+# this recipe's host dependency. Accept our previous patch, reject other drift.
+recipe=feeds/passwall_packages/xray-core/Makefile
+grep -Fxq 'PKG_NAME:=Xray-core' "$recipe"
+grep -Fxq 'PKG_VERSION:=26.10.21' "$recipe"
+awk '
+    /^PKG_BUILD_DEPENDS:=golang\/host$/ {
+        $0 = "PKG_BUILD_DEPENDS:=golang1.27/host"
+    }
+    /^PKG_BUILD_DEPENDS:/ { dependencies++ }
+    /^PKG_BUILD_DEPENDS:=golang1\.27\/host$/ { expected++ }
+    { print }
+    END { if (dependencies != 1 || expected != 1) exit 1 }
+' "$recipe" > "$recipe_tmp"
+cat "$recipe_tmp" > "$recipe"
+./scripts/feeds update -i passwall_packages
+./scripts/feeds install -a

@@ -1,0 +1,15 @@
+# Trusted source revisions. Update deliberately; builds never follow moving branches.
+OPENWRT_URL=https://github.com/openwrt/openwrt.git
+OPENWRT_REF=v25.12.6
+OPENWRT_COMMIT=64900e756efa667774214f9c6b17c113222e01f7
+PASSWALL2_URL=https://github.com/Openwrt-Passwall/openwrt-passwall2.git
+PASSWALL2_REF=main
+PASSWALL2_COMMIT=0f923be3f00f9fb8db9591c9ecab41e7de5ec75e
+PASSWALL_PACKAGES_URL=https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git
+PASSWALL_PACKAGES_COMMIT=049aaf472e8ce7e423299d43a516b7092a25b381
+MOSDNS_URL=https://github.com/sbwml/luci-app-mosdns.git
+MOSDNS_REF=v5
+MOSDNS_COMMIT=bd40245303cd0ba56804d49eed5dbc4be2a082ca
+ARGON_URL=https://github.com/jerrykuku/luci-theme-argon.git
+ARGON_REF=master
+ARGON_COMMIT=96734f4f52e98ac70f564ca4b92644b849e189ba
