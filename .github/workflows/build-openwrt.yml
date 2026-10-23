@@ -111,6 +111,8 @@ jobs:
               'mosdns': 'mosdns/mosdns',
               'geo2txt': 'mosdns/geo2txt',
               'v2ray-core': 'packages/net/v2ray-core',
+              'nlbwmon': 'packages/net/nlbwmon',
+              'luci-app-nlbwmon': 'luci/applications/luci-app-nlbwmon',
           }
           root = Path('openwrt').resolve()
           for package, source in providers.items():
@@ -168,6 +170,7 @@ jobs:
               'v2ray-geoip', 'v2ray-geosite', 'luci-theme-argon',
               'wpad-mbedtls', 'apk-mbedtls', 'luci-app-package-manager',
               'luci-app-ddns', 'luci-app-upnp', 'luci-app-ttyd', 'firewall4',
+              'nlbwmon', 'luci-app-nlbwmon', 'luci-i18n-nlbwmon-zh-cn',
           }
           required.update(
               s.removeprefix('CONFIG_PACKAGE_').removesuffix('=y')
@@ -175,7 +178,10 @@ jobs:
               if s.startswith('CONFIG_PACKAGE_ddns-scripts') and s.endswith('=y')
           )
           missing = required - packages.keys()
-          forbidden = {'luci-app-passwall', 'luci-app-argon-config', 'opkg'} & packages.keys()
+          forbidden = {
+              'luci-app-passwall', 'luci-app-argon-config', 'opkg',
+              'adguardhome', 'luci-app-adguardhome',
+          } & packages.keys()
           forbidden.update(p for p in packages if p.startswith('wpad-basic'))
           if missing or forbidden:
               raise SystemExit(f'Invalid firmware package set: missing={sorted(missing)}, forbidden={sorted(forbidden)}')
@@ -197,10 +203,13 @@ jobs:
                   payload = members[0].size
                   blocks = limit // peb
                   reserve = 4 + math.ceil(blocks * 20 / 1024)
-                  # Leave at least one additional rootfs_data block.
-                  required = math.ceil(payload / leb) + reserve + (name == 'root')
+                  # This user-selected profile must retain at least 8 MiB of
+                  # data capacity, not merely one rootfs_data erase block.
+                  data_blocks = math.ceil(8 * 1024**2 / leb) if name == 'root' else 0
+                  required = math.ceil(payload / leb) + reserve + data_blocks
                   assert 0 < payload and required <= blocks, (name, payload, required, blocks)
-                  print(f'{name}: {payload} bytes; conservative UBI PEBs {required}/{blocks}')
+                  print(f'{name}: {payload} bytes; conservative UBI PEBs {required}/{blocks}; '
+                        f'data budget {data_blocks * leb} bytes')
           PY
           (cd "$target" && sha256sum -c sha256sums)
           mkdir firmware

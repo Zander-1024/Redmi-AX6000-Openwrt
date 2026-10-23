@@ -88,12 +88,20 @@ for ap in $aps_2g $aps_5g; do
 done
 uci commit wireless || exit 1
 
-# Retain upstream NTP, cron logging defaults and generated stable APK feeds.
+# Mainland home routers use public NTP, not cloud-private endpoints. Keep the
+# upstream cron logging defaults and generated stable APK feeds unchanged.
 delete_option 'system.@system[0].init' || exit 1
 set_options \
     'system.@system[0].zonename=Asia/Shanghai' \
     'system.@system[0].timezone=CST-8' \
-    'system.@system[0].conloglevel=7' || exit 1
+    'system.@system[0].conloglevel=7' \
+    'system.ntp=timeserver' \
+    'system.ntp.enabled=1' \
+    'system.ntp.enable_server=0' || exit 1
+delete_option 'system.ntp.server' || exit 1
+for server in ntp.tencent.com ntp1.tencent.com ntp2.tencent.com; do
+    uci add_list "system.ntp.server=$server" || exit 1
+done
 uci commit system || exit 1
 set_options 'luci.main.lang=zh_cn' || exit 1
 uci commit luci || exit 1
@@ -194,6 +202,19 @@ set_options \
     'mosdns.config.redirect=0' \
     'mosdns.config.local_dns_redirect=0' || exit 1
 uci commit mosdns || exit 1
+
+# Keep accounting bounded in tmpfs: no frequent NAND writes or unbounded history.
+# /var is volatile on OpenWrt; users can export history from the LuCI backup page.
+set_options \
+    'nlbwmon.@nlbwmon[0].database_directory=/var/lib/nlbwmon' \
+    'nlbwmon.@nlbwmon[0].database_generations=3' \
+    'nlbwmon.@nlbwmon[0].database_limit=10000' \
+    'nlbwmon.@nlbwmon[0].database_compress=1' \
+    'nlbwmon.@nlbwmon[0].database_prealloc=0' \
+    'nlbwmon.@nlbwmon[0].netlink_buffer_size=524288' \
+    'nlbwmon.@nlbwmon[0].commit_interval=24h' \
+    'nlbwmon.@nlbwmon[0].refresh_interval=30s' || exit 1
+uci commit nlbwmon || exit 1
 
 keep_path=/www/luci-static/argon/background/
 touch /etc/sysupgrade.conf || exit 1
