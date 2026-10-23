@@ -3,6 +3,7 @@
 为 **MediaTek Redmi Router AX6000 原厂分区布局**构建固件。唯一设备目标为
 `mediatek/filogic/xiaomi_redmi-router-ax6000-stock`，不是 Qualcomm 小米 AX6000，
 也不是 `ubootmod` / 扩容布局。没有实机分区证据时不要切换目标或强制刷入。
+家庭嵌入式设备的资源、网络和维护原则见 [`AGENTS.md`](AGENTS.md)。
 
 ## 版本与依赖
 
@@ -17,10 +18,11 @@
 | [PassWall packages](https://github.com/Openwrt-Passwall/openwrt-passwall-packages) | Xray 26.10.21、Sing-box 1.14.3、Hysteria 2.13.0、V2Ray plugin 5.49.0 | `049aaf472e8ce7e423299d43a516b7092a25b381` |
 | [MosDNS](https://github.com/sbwml/luci-app-mosdns) | v5 快照：核心 5.3.4-r14、LuCI 1.7.14-r1 | `bd40245303cd0ba56804d49eed5dbc4be2a082ca` |
 | [Argon](https://github.com/jerrykuku/luci-theme-argon) | 3.1.0，已集成设置界面 | `96734f4f52e98ac70f564ca4b92644b849e189ba` |
+| [nlbwmon](https://github.com/openwrt/packages/tree/093d551675b1119a06ef224d419905e8d6b2af1a/net/nlbwmon) | 2025.06.02~29236be6-r1，含官方 LuCI 与中文包 | 随正式版固定 packages / LuCI feeds |
 
 保留 release 自带的五组固定官方 feeds。`passwall2` 提供唯一的代理管理界面，
 `passwall_packages` 提供 Xray、Sing-box、Hysteria、代理辅助组件、V2Ray plugin 和 geoip/geosite；
-MosDNS feed 提供 MosDNS、geo2txt。V2Ray core、DDNS、ttyd、UPnP 和系统组件保留官方来源。
+MosDNS feed 提供 MosDNS、geo2txt。V2Ray core、DDNS、ttyd、UPnP、nlbwmon 和系统组件保留官方来源。
 保留原先明确选择的独立 Hysteria / V2Ray core / plugin，但它们不是 PassWall 2 的额外管理界面；
 PassWall 2 的基础核心选择为 Xray + Sing-box。V2Ray 独立服务仍采用上游禁用默认值。
 不再混入 kenzo/small，不强制覆盖整套包，也不替换官方 Go feed。
@@ -28,6 +30,36 @@ PassWall 2 的基础核心选择为 Xray + Sing-box。V2Ray 独立服务仍采�
 
 `.config` 保留完整 `wpad-mbedtls`、中文界面及原有 DDNS 服务商。
 Gandi 的 API key 后端未擅自改为 PAT 后端；升级固件不会自动迁移账户认证协议。
+
+## 家庭路由器资源预算
+
+该机型为 [512 MiB RAM、128 MiB NAND](https://openwrt.org/toh/hwdata/xiaomi/xiaomi_redmi_ax6000)，
+但 stock rootfs 仅使用 80 MiB `ubi`，不能将总闪存都算作可安装空间。
+用户明确选择：**保留原代理核心与 MosDNS，只加 nlbwmon，本轮不加入 AdGuard Home**。
+
+以下来自上一轮真实镜像及同版本官方插件的资源预检。除 nlbwmon 为整包安装大小外，
+安装列是主要可执行文件大小；XZ 列为同 256 KiB 块大小的单文件 SquashFS 测量，不等于最终镜像增量。
+
+| 组件 | 安装大小 | 单文件 XZ 测量 | 轻负载 RSS 快照 |
+| --- | ---: | ---: | ---: |
+| Xray | 28.32 MiB | 8.00 MiB | 42.33 MiB |
+| Sing-box | 54.75 MiB | 14.51 MiB | 未启动 |
+| V2Ray core | 35.09 MiB | 9.48 MiB | 未启动 |
+| Hysteria | 21.13 MiB | 5.93 MiB | 未启动 |
+| MosDNS | 15.09 MiB | 4.37 MiB | 87.21 MiB |
+| nlbwmon | 46 KiB | 未单独拆分，见本轮整镜像增量 | 0.95 MiB |
+| AdGuard Home（本轮不打包） | 32.49 MiB | 8.43 MiB | 未启动 |
+
+AdGuard Home 还需要过滤库、查询日志、缓存和运行内存；按当前体积预算，无法在加入后维持数据预留目标。
+它还需与 dnsmasq/MosDNS 明确串联，避免争抢 DNS 53 端口；本轮不硬塞，也不擅自删掉用户保留的核心。
+
+RSS 测量在 512 MiB 限制的隔离容器中进行，MosDNS 已加载实际规则，Xray 手动运行真实生成的分流配置，
+nlbwmon 已统计一次实际转发流量。**这不是整机、满库、满并发或无线/PPE 工作时的 RAM 峰值。**
+默认代理主开关仍关闭，不代表这些代理核心会全部同时常驻。
+
+本组合的发布门禁要求扣除保守 UBI 元数据和坏块预留后，仍留出至少 8 MiB 数据容量；
+未来新增大型插件以至少 16 MiB 为目标，需重新选择精简方案。不要在内置闪存上无预算在线更新大核心或 geodata，
+优先更新源码锁并重编固件。
 
 ## GitHub Actions 构建
 
@@ -51,7 +83,7 @@ Gandi 的 API key 后端未擅自改为 PAT 后端；升级固件不会自动迁
 大小写不敏感文件系统冲突。先用 `sha256sum -c SHA256SUMS` 校验整套分发文件；
 上游清单还包含未分发的原始构建文件，可用 `sha256sum -c --ignore-missing upstream-sha256sums`。
 容量门禁按 stock DTS 的 30 MiB `ubi_kernel`、80 MiB `ubi`、
-128 KiB 擦除块计算，并保守预留 UBI 元数据、坏块和 rootfs_data 空间；
+128 KiB 擦除块计算，保守预留 UBI 元数据、坏块，并为本组合额外保留至少 8 MiB rootfs_data 数据容量；
 这不替代刷机前对实机分区、可用块和恢复手段的确认。
 
 **Update Checker** 也仅手动运行，读取同一锁文件并验证同一 release SHA。
@@ -112,7 +144,10 @@ Wi-Fi 密码不是管理密码；本项目不硬编码 root 管理密码。
 初始化脚本先设置 LAN，再根据无线设备的 `band` 和 AP 的 `device/mode` 关系设置双频，
 不依赖 section 数组顺序。缺少任一频段的 AP、必要 UCI 写入或提交失败时返回非零，
 保留脚本供下次启动重试。没有提前写入的“已初始化”标记；全部成功才由 OpenWrt 删除脚本。
-Argon 背景保留路径只追加一次。NTP、cron 日志级别和稳定版软件仓库使用上游默认值。
+Argon 背景保留路径只追加一次。cron 日志级别和稳定版软件仓库使用上游默认值。
+NTP 通过 UCI 明确设置 `ntp.tencent.com`、`ntp1.tencent.com`、`ntp2.tencent.com` 三个腾讯公网时间源，
+启用校时客户端、关闭对外 NTP 服务，保留上海时区（UTC+8）。不使用云厂商内网地址，不再替换上游源码中的域名子串。
+这也会替换保留配置中残留的旧 NTP 列表；不依赖尚未配置好的代理进行首次校时。
 编译选择 `CONFIG_LUCI_LANG_zh_Hans=y`，但 LuCI 运行时语言键为 `zh_cn`；
 不能把编译语言名直接写入 `luci.main.lang`，否则中文目录加载失败而显示英文。
 
@@ -168,13 +203,24 @@ PassWall 2 未启用时系统仍使用普通 DNS，普通客户端查询不会�
   ttyd 保持 LAN 接口和 `/bin/login`，不扩大到 WAN。
 - Argon 背景保留项只追加一次，即使原 `/etc/sysupgrade.conf` 最后一行没有换行，也不会合并破坏旧保留项。
 
+## nlbwmon 流量统计
+
+在 **服务 → 带宽监控** 查看按主机/协议统计；附带配置、备份/恢复和中文页面。
+它复用 conntrack 计数，不争抢 DNS 端口，不修改现有代理或卸载策略。
+
+- 数据目录为 `/var/lib/nlbwmon`（OpenWrt 的 RAM/tmpfs），每月一个周期，最多保留 3 代、每库最多 10,000 条记录。
+- 使用压缩归档、不预分配全库，接收缓冲为 512 KiB；30 秒刷新连接计数，24 小时提交到 RAM 数据目录。
+- **重启会丢失这些临时历史**；需要时在备份页手动导出。若改成内置闪存或外置盘，须另外预算空间、留存和写入频率。
+- 记录数/缓冲限制不是进程 RSS 硬上限。达到记录数上限会影响新增统计；流量卸载也可能使统计不准确，
+  保留现有卸载配置并以真机观察为准，不将该统计当作运营商精确计费依据。
+
 ## 旧配置与升级差异
 
 - 25.12 使用 **APK** 和 `luci-app-package-manager`，不再修改 `/etc/opkg/distfeeds.conf`。
   三个自定义源码 feed 没有本项目发布的在线 APK 仓库，已关闭其运行时仓库生成，
   不影响编译入固件；这些插件的升级应更新源码锁并重编固件，不要添加不存在的官方 feed URL。
 - Argon 3.x 已包含设置页，不再安装旧独立 `luci-app-argon-config`。
-- 不再强制 `cronloglevel=8`，不改写上游 NTP；已删除会重复拼坏域名的旧 `diy-part2.sh`。
+- 不再强制 `cronloglevel=8`；已删除会拼坏 NTP 域名的旧 `diy-part2.sh`，改由首次启动 UCI 设置腾讯公网时间源。
 - **保留配置升级不等于干净初始化**。新固件的默认脚本会应用本项目的 LAN、无线和 PassWall 2 策略；
   旧 PassWall 节点资料保留供手动迁移，不自动转换、启用或删除。不要恢复旧 feeds / 独立 Argon 插件。
   升级前备份并准备与 stock 分区匹配的恢复手段，旧备份不能替代新默认值验收。
@@ -184,53 +230,65 @@ PassWall 2 未启用时系统仍使用普通 DNS，普通客户端查询不会�
 本次修改针对已复现的构建/配置错误与升级兼容性。此前使用中的未知现象没有日志或实机证据，
 不能据此声称找到根因或“稳定性已修复”。
 
-- 本轮 `bash -n`、`sh -n`、ShellCheck、两份工作流的 actionlint 已通过。
-- Ubuntu 24.04 ARM64 中真实执行 feeds 集成、`make defconfig` 和重复执行，所选包、stock 目标、
-  Xray + Sing-box、完整 wpad、DDNS、ttyd、UPnP、APK 管理器均保留；包提供者、Go 1.27 host 依赖、
-  自定义运行时 feed 关闭状态已核对，旧 PassWall 未选中。
-- 官方锁定 feeds 仍有未选中 WeeChat 的递归依赖诊断和 Prosody 缺失依赖警告；
-  不能把配置命令退出零视作完整编译通过。
-- 从本轮发布的 sysupgrade 提取真实 UCI、BusyBox、ubus/rpcd 和核心，在一次性容器中
-  复现旧初始化器“返回成功但未配置 PassWall 2、保留示例和旧客户端启用状态”的问题。
-  新逻辑通过正常/倒序双频、无末尾换行保留项、缺失频段/服务配置、九个包提交失败、
-  重试和连续执行 smoke；旧节点资料及同名真实节点保留，旧客户端/firewall/tracker 接管项被禁用或移除。
-- 使用镜像内打包的 PassWall 2 Lua 生成器，核对分流顺序、GFW TCP+UDP、默认直连和本机 DNS 直连出站，
-  并通过 Xray 26.10.21 配置检查；实际读取了打包的 `geosite:gfw`，不是假设分类存在。
-- 镜像内 Sing-box 1.14.3 使用真实 Lua 生成器和 geoview 转换 GeoSite/GeoIP，生成 SRS 文件后通过
-  `sing-box check`；未把跳过生成文件的空跑当作验证。
-- 在无 WAN 出口的隔离网络中，以新镜像内的 Xray、MosDNS、HTTP 服务和 SOCKS 测试节点验证：
-  GFW 返回代理端响应，国内、私网和未命中域名返回直连端响应；本机 DNS 使用 `direct` 可解析，
-  改为 `remote` 后真实 DNS 查询超时，恢复 `direct` 后解析和代理访问恢复。
-- 另外用打包的 MosDNS 初始化器和 geo2txt 生成实际默认 profile，在无网络命名空间启动真实核心；
-  本地 hosts 正常解析，GeoSite 广告域名及其子域名按配置返回 `0.0.0.0`，不是用简化 DNS fixture 代替广告过滤验证。
-- 真实 LuCI / Argon 页面已复现并验证语言键修正；新镜像中文界面、默认关闭的主开关、
-  AX6000 分流和本机 DNS 直连选项已复验，旧 PassWall 菜单不存在。
-  容器没有路由器内核模块，页面的缺少组件提示不能用于判断实机模块；未验收透明代理或无线硬件。
-- 构建工作流检查实际镜像 manifest；用上一轮真实 PassWall 固件的 manifest 验证，旧镜像会因
-  缺少 PassWall 2 / 含旧 PassWall 被拒绝，不能仅改标签后冒充新固件。
-- 本轮 [完整构建 #39916403287](https://github.com/Zander-1024/Redmi-AX6000-Openwrt/actions/runs/39916403287)
-  已通过，并公开 [PassWall 2 stock 固件 Release](https://github.com/Zander-1024/Redmi-AX6000-Openwrt/releases/tag/ax6000-passwall2-v25.12.6-20261023T084409Z-39916403287-1)。
-  已下载核对全部 12 个 Release 文件的 SHA-256、两份校验清单中对应文件，以及与 Actions Artifact 的逐文件一致性。
-  实际 manifest 包含 PassWall 2 26.10.20-r1 和中文包，不包含旧 PassWall；镜像内初始化脚本与当前源码逐字节一致。
-- 更新检查器需要专用 `ACTIONS_TRIGGER_PAT`。此前实际运行已验证 SHA 一致，
-  但因缺少 token 失败且没有保存触发缓存；未宣称真实 dispatch 通过。
-- 本次未连接路由器、未提供真实外部节点，**未验证实机稳定性**。本地配置/核心验证不能替代 WAN、无线和硬件测试。
+### 本轮：家庭资源约束、腾讯公网 NTP、nlbwmon
 
-### 本轮发布镜像
+- 已新增 `AGENTS.md`；按用户选择保留原代理核心与 MosDNS，只增加 nlbwmon，不打包 AdGuard Home。
+- shell 语法、ShellCheck、actionlint、真实 Linux feeds/defconfig 和工作流原样依赖检查已通过；
+  实际 manifest 包含 nlbwmon、官方 LuCI/中文包，不含旧 PassWall 或 AdGuard Home。
+  锁定 feeds 中未选中 WeeChat 的递归依赖诊断和 Prosody 缺失依赖警告仍存在，未通过隐藏警告冒充修复。
+- [完整 stock 构建 #39947267273](https://github.com/Zander-1024/Redmi-AX6000-Openwrt/actions/runs/39947267273)
+  已通过，并公开 [本轮固件 Release](https://github.com/Zander-1024/Redmi-AX6000-Openwrt/releases/tag/ax6000-passwall2-v25.12.6-20261023T130538Z-39947267273-1)。
+  全部 12 个文件的 SHA-256、两份校验清单中对应项、与 Actions Artifact 的逐文件一致性均已核对。
+  实际镜像通过包清单及新增的 8 MiB 数据容量门禁；构建输入配置、源码锁和镜像内初始化脚本与提交内容一致。
+- 从该新镜像提取真实 UCI/BusyBox，验证旧 NTP 列表替换、上海时区、客户端启用/服务端关闭、
+  倒序双频配置、连续执行幂等，以及 system/nlbwmon 提交失败、nlbwmon 配置缺失后的保留和重试。
+  三个腾讯公网时间源均收到有效 NTP 回包；这不是用户路由器 WAN 首次校时的实测。
+- 新镜像内的 nlbwmon 在隔离的 LAN → 路由/NAT → 测试 WAN 中统计真实 1 MiB HTTP 传输：
+  客户端下载计数为 1,058,906 字节（含网络开销），实际执行数据库提交；不是伪造记录或只记录调用。
+  单独运行时 RSS 为 956 KiB；上方组合负载快照不等于整机或峰值。
+- 实际运行新镜像的 ubus/rpcd/uhttpd 和中文 LuCI/Argon：带宽监控显示对应客户端 MAC、下载量和图表；
+  配置页显示 10,000 条、3 代、RAM 数据路径及 30 秒/24 小时间隔。
+  点击“生成备份”所得归档与真实已提交数据库逐字节一致。浏览器仅允许本机地址；
+  可选的 GitHub OUI 厂商库请求被拦截时，统计和图表仍正常显示。
+- 新 manifest 门禁实际拒绝缺少 nlbwmon 的上一轮镜像；隔离的容量边界样本超出预算 1 字节时被拒绝。
 
-文件：`openwrt-mediatek-filogic-xiaomi_redmi-router-ax6000-stock-squashfs-sysupgrade.bin`，
-72,673,584 字节（约 69.3 MiB）。SHA-256：
+### 既有 PassWall 2 / MosDNS 验证范围
+
+本轮 Xray、Sing-box、V2Ray、Hysteria、MosDNS 二进制分别与[上一轮构建](https://github.com/Zander-1024/Redmi-AX6000-Openwrt/actions/runs/39916403287)
+逐一核对 SHA-256 一致。以下是上一轮已执行的行为验证，不冒充本轮重新执行：
+
+- 真实初始化器通过正常/倒序双频、无末尾换行保留项、缺失频段/服务配置、九个包提交失败、
+  重试和连续执行；旧节点资料及同名真实节点保留，旧客户端/firewall/tracker 接管项被禁用或移除。
+- 使用打包的 Lua 生成器、真实 GeoSite/GeoIP 和 geoview 生成配置/SRS，分别通过 Xray 与 Sing-box 配置检查；
+  隔离 HTTP/SOCKS 场景验证 GFW 走代理、国内/私网/未命中走直连。
+  本机 DNS 改为 `remote` 时实际解析超时，恢复 `direct` 后解析和访问恢复。
+- 用实际 MosDNS 初始化器和 geo2txt 生成默认 profile，真实核心验证本地 hosts、
+  GeoSite 广告域名及子域名返回 `0.0.0.0`，未以简化 DNS fixture 代替广告过滤。
+- 实际中文 LuCI/Argon 页面验证默认关闭的代理主开关、AX6000 分流、本机 DNS 直连及旧菜单移除。
+  容器缺少路由器内核模块，页面的组件提示不能据此判定实机模块状态。
+- Update Checker 此前实际运行已验证源码 SHA，但因缺少专用 `ACTIONS_TRIGGER_PAT` 失败且未保存触发缓存；
+  未宣称跨工作流 dispatch 已通过。
+
+### 本轮发布镜像与容量
+
+文件：`openwrt-mediatek-filogic-xiaomi_redmi-router-ax6000-stock-squashfs-sysupgrade.bin`。
+
+| 度量 | 数值 | 口径 |
+| --- | ---: | --- |
+| sysupgrade 文件 | 72,714,544 字节，约 69.35 MiB | 比上一轮增加 40,960 字节（40 KiB），是整轮改动而非 nlbwmon 单包增量 |
+| kernel 负载 | 4,507,520 字节 | stock 30 MiB `ubi_kernel` |
+| root 负载 | 68,198,400 字节 | stock 80 MiB `ubi` |
+| 剩余逻辑数据容量估算 | 10,792,960 字节，约 10.29 MiB | 扣除模型中的 UBI 元数据/坏块预留，尚未扣除 UBIFS 文件系统开销 |
+
+SHA-256：
 
 ```text
-a67827645dbaf48d53c2f19c0556f526ce57cee4705e26f8afef7ee7bfe6accf
+02399fadc10c0ec9bb575e9fabcfb941bd7bfb019549bd50b63d55e8b1d4d593
 ```
 
-| sysupgrade 负载 | 实际大小（字节） | stock 分区 |
-| --- | ---: | --- |
-| kernel | 4,507,520 | 30 MiB `ubi_kernel` |
-| root | 68,161,536 | 80 MiB `ubi` |
-
-构建已通过保守 UBI 预留门禁；表中原始负载大小不等于设备剩余空间，也不是实机刷写成功证明。
+容量门禁保留的是 UBI 逻辑数据容量，不是刷机后 `df` 的可用空间；实机坏块、UBIFS 格式化和后续配置会继续影响余量。
+本轮未连接或刷写路由器，未提供真实外部代理节点；这些编译、容器和网页证据不能替代实机 WAN、无线、
+硬件卸载准确性、峰值内存或长期稳定性验收。
 
 ### 设备验收清单
 
@@ -241,6 +299,9 @@ a67827645dbaf48d53c2f19c0556f526ce57cee4705e26f8afef7ee7bfe6accf
 3. 按上面的步骤配置真实节点，验证 GFW 命中/未命中、国内直连，以及 TCP 80/443、其他 TCP 端口和 UDP 的行为。
 4. 检查 MosDNS 5335 监听、广告过滤、无 DNS 循环；再重启确认无线和配置持续正常。
 5. 单独验证保留配置升级，不把它与干净初始化混为一谈。
+6. 在代理未配置时通过 WAN 完成腾讯公网 NTP 校时，核对上海时区，并检查重启后的首次校时。
+7. 核对实际 `/overlay` 容量、正常使用/加载规则后的 RAM 和 nlbwmon 进程；对照客户端传输量检查卸载下的统计偏差。
+   验证手动导出历史，并确认接受默认 RAM 数据在重启后丢失。
 
 ## 致谢与许可
 
