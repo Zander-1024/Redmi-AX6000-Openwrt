@@ -106,11 +106,15 @@ ARM64 Ubuntu 不安装仅适用于 x86 的 multilib 包。请像工作流一样�
 **用户为局域网、无网线首次初始化便利，明确保留固定密码 `12345678`。**
 维护时不得擅自关闭无线、改成必须接网线初始化，或默认降为 HE80 / 关闭 802.11r。
 固定密码并非安全部署建议，初始化后应自行改密；无线可用性仍须实机验证。
+Wi-Fi 密码不是管理密码；本项目不硬编码 root 管理密码。
+首次登录后应立即设置独立的 LuCI / SSH root 密码，不要把 LuCI、SSH 或 ttyd 映射到 WAN。
 
 初始化脚本先设置 LAN，再根据无线设备的 `band` 和 AP 的 `device/mode` 关系设置双频，
 不依赖 section 数组顺序。缺少任一频段的 AP、必要 UCI 写入或提交失败时返回非零，
 保留脚本供下次启动重试。没有提前写入的“已初始化”标记；全部成功才由 OpenWrt 删除脚本。
 Argon 背景保留路径只追加一次。NTP、cron 日志级别和稳定版软件仓库使用上游默认值。
+编译选择 `CONFIG_LUCI_LANG_zh_Hans=y`，但 LuCI 运行时语言键为 `zh_cn`；
+不能把编译语言名直接写入 `luci.main.lang`，否则中文目录加载失败而显示英文。
 
 ## PassWall 2 配置与迁移
 
@@ -170,7 +174,7 @@ PassWall 2 未启用时系统仍使用普通 DNS，普通客户端查询不会�
   三个自定义源码 feed 没有本项目发布的在线 APK 仓库，已关闭其运行时仓库生成，
   不影响编译入固件；这些插件的升级应更新源码锁并重编固件，不要添加不存在的官方 feed URL。
 - Argon 3.x 已包含设置页，不再安装旧独立 `luci-app-argon-config`。
-- 不覆盖 `cronloglevel=8`，不改写上游 NTP；已删除会重复拼坏域名的旧 `diy-part2.sh`。
+- 不再强制 `cronloglevel=8`，不改写上游 NTP；已删除会重复拼坏域名的旧 `diy-part2.sh`。
 - **保留配置升级不等于干净初始化**。新固件的默认脚本会应用本项目的 LAN、无线和 PassWall 2 策略；
   旧 PassWall 节点资料保留供手动迁移，不自动转换、启用或删除。不要恢复旧 feeds / 独立 Argon 插件。
   升级前备份并准备与 stock 分区匹配的恢复手段，旧备份不能替代新默认值验收。
@@ -192,6 +196,13 @@ PassWall 2 未启用时系统仍使用普通 DNS，普通客户端查询不会�
   重试和连续执行 smoke；旧节点资料及同名真实节点保留，旧客户端/firewall/tracker 接管项被禁用或移除。
 - 使用锁定 PassWall 2 的真实 Lua 生成器，核对配置的分流顺序、GFW TCP+UDP、默认直连和本机 DNS 直连出站，
   并通过 Xray 26.10.21 配置检查；实际读取了打包的 `geosite:gfw`，不是假设分类存在。
+- 同基线 Sing-box 1.14.3 使用真实 Lua 生成器和 geoview 转换 GeoSite/GeoIP，生成 SRS 文件后通过
+  `sing-box check`；未把跳过生成文件的空跑当作验证。
+- 在无 WAN 出口的隔离网络中，以真实 Xray、MosDNS、HTTP 服务和 SOCKS 测试节点验证：
+  GFW 返回代理端响应，国内、私网和未命中域名返回直连端响应；本机 DNS 使用 `direct` 可解析，
+  改为 `remote` 后真实 DNS 查询超时，恢复 `direct` 后解析和代理访问恢复。
+- 用真实 LuCI / Argon 页面复现 `zh_Hans` 导致英文界面，改为 `zh_cn` 后中文菜单恢复；
+  已观察主节点、AX6000 分流规则及本机 DNS 直连选项。容器没有路由器内核模块，不能据此验收透明代理或无线硬件。
 - 构建工作流检查实际镜像 manifest；用上一轮真实 PassWall 固件的 manifest 验证，旧镜像会因
   缺少 PassWall 2 / 含旧 PassWall 被拒绝，不能仅改标签后冒充新固件。
 - 本轮 PassWall 2 完整构建和发布尚未取得产物证据；上一轮 PassWall 成功记录不作为本轮编译证明。

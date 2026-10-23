@@ -95,7 +95,7 @@ set_options \
     'system.@system[0].timezone=CST-8' \
     'system.@system[0].conloglevel=7' || exit 1
 uci commit system || exit 1
-set_options 'luci.main.lang=zh_Hans' || exit 1
+set_options 'luci.main.lang=zh_cn' || exit 1
 uci commit luci || exit 1
 
 set_options \
