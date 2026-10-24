@@ -1,0 +1,5 @@
+/build-output/
+/firmware/
+/openwrt/
+__pycache__/
+*.pyc

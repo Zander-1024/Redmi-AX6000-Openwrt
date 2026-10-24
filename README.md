@@ -1,8 +1,9 @@
 # Redmi AX6000 OpenWrt
 
-为 **MediaTek Redmi Router AX6000 原厂分区布局**构建固件。唯一设备目标为
-`mediatek/filogic/xiaomi_redmi-router-ax6000-stock`，不是 Qualcomm 小米 AX6000，
-也不是 `ubootmod` / 扩容布局。没有实机分区证据时不要切换目标或强制刷入。
+为 **MediaTek Redmi Router AX6000（RB06）**构建固件，默认保留
+`mediatek/filogic/xiaomi_redmi-router-ax6000-stock`，同时按用户选择额外构建官方
+`xiaomi_redmi-router-ax6000-ubootmod` 和精简迁移恢复镜像。两个布局的正式升级镜像不能互刷。
+迁移、备份与 TFTP 救援见 [迁移与恢复指导](docs/ubootmod.md)，不在设备上自动执行迁移。
 家庭嵌入式设备的资源、网络和维护原则见 [`AGENTS.md`](AGENTS.md)。
 
 ## 版本与依赖
@@ -66,25 +67,26 @@ nlbwmon 已统计一次实际转发流量。**这不是整机、满库、满并�
 1. 将配置及脚本提交到自己的仓库。
 2. 在 Actions 选择 **Build OpenWrt**，手动运行；默认不启用 SSH 调试。
 3. 构建使用 `ubuntu-24.04`，checkout release 后校验 SHA；所有 Actions 固定完整提交。
-4. 编译、stock sysupgrade、manifest、校验和及分区容量检查全部成功后，才上传产物。
+4. 两种正式固件及精简 recovery 的编译、manifest、校验和及独立分区容量检查全部成功后，才上传产物。
    Release 先上传草稿，全部成功后公开；失败不会发布固件或清理旧 Release。
 
-默认 Artifact / Release 只分发通过分区校验的 **stock sysupgrade** 和元数据，
-不分发未通过该门禁的 initramfs/factory 或通用 BL2 二进制。
-可打开 `UPLOAD_BIN_DIR` 获取原始构建树产物，但不能将其中每个镜像都视为可安全刷入 stock。
+Artifact / Release 分发三个独立归档：stock 正式固件、ubootmod 正式固件、迁移与恢复包。
+迁移包中的精简 recovery 单独编译，不把完整插件 initramfs 塞入 stock 的 30 MiB 分区。
+可打开 `UPLOAD_BIN_DIR` 获取原始构建树产物；其中未分发的文件没有经过全部交付门禁。
 已移除 Cowtransfer/WeTransfer 远程脚本。Release tag 为
-`ax6000-passwall2-<release>-<UTC时间>-<run ID>-<run attempt>`，避免与旧 PassWall 固件混淆或被重试覆盖。
-公开成功后仅保留最近三份非草稿、非预发布的 `ax6000-` Release，并删除对应 tag；
+`ax6000-passwall2-<release>-<UTC时间>-<run ID>-<run attempt>`，避免被重试覆盖。
+公开成功后保留最近三份非草稿、非预发布的 `ax6000-` Release，并删除对应 tag；
 不处理其他前缀或旧命名历史产物。运行记录清理单独授予 `actions: write`。
 
-随固件保留 `sources.lock`、实际源码 SHA 的 `build-sources.txt`、输入 `requested.config`、
-最终 `final.config`、包版本 manifest、上游 buildinfo、原始 `upstream-sha256sums`
-及包含附加文件的 `SHA256SUMS`。两份校验清单使用不同名称，避免 GitHub Release /
-大小写不敏感文件系统冲突。先用 `sha256sum -c SHA256SUMS` 校验整套分发文件；
-上游清单还包含未分发的原始构建文件，可用 `sha256sum -c --ignore-missing upstream-sha256sums`。
-容量门禁按 stock DTS 的 30 MiB `ubi_kernel`、80 MiB `ubi`、
-128 KiB 擦除块计算，保守预留 UBI 元数据、坏块，并为本组合额外保留至少 8 MiB rootfs_data 数据容量；
-这不替代刷机前对实机分区、可用块和恢复手段的确认。
+各正式固件归档内含 `sources.lock`、实际源码 SHA 的 `build-sources.json`、输入 `requested.config`、
+最终 `final.config`、包 manifest、上游 buildinfo、`capacity.json`、镜像内配置执行的 `runtime.json`、
+原始 `upstream-sha256sums` 和包含附加文件的 `SHA256SUMS`。
+本地构建还记录配置仓库提交、工作树改动状态和输入摘要，便于核对提交前编译的产物。
+先校验归档顶层清单，解压后再次 `sha256sum -c SHA256SUMS`；原始上游清单仅供追溯，
+其中未分发的文件可用 `--ignore-missing` 跳过。
+stock 按 30 MiB / 80 MiB 分区保留至少 8 MiB 逻辑数据容量；ubootmod 按 122.5 MiB UBI，
+在两个 1 MiB 环境卷和 16 MiB recovery 卷之外，保留至少 16 MiB。
+模型扣除 UBI 元数据和默认坏块预留，不能代替刷机后 UBIFS `df` 或实机坏块检查。
 
 **Update Checker** 也仅手动运行，读取同一锁文件并验证同一 release SHA。
 跨工作流 dispatch 需要仓库 secret `ACTIONS_TRIGGER_PAT`，具备目标仓库 dispatch 权限。
@@ -92,42 +94,33 @@ nlbwmon 已统计一次实际转发流量。**这不是整机、满库、满并�
 缓存 key 包含锁文件及构建配置；命中只代表曾成功触发，**不是编译成功证明**。
 同一配置构建失败时，直接手动运行 Build OpenWrt 重试，不要靠清除缓存偷偷升级源码。
 
-## 本地 Linux 构建
+## Docker 本地构建
 
-依赖使用 [OpenWrt 官方 Ubuntu 24.04 清单](https://openwrt.org/docs/guide-developer/toolchain/install-buildsystem)，
-额外包含 MediaTek 所需的 `python3-dev`、`libelf-dev`。在非 root 用户、大小写敏感的
-Linux 文件系统中执行；macOS 下可使用 Linux VM/container，不在宿主机直接编译。
+建议使用 Linux Docker 或启用了当前发行版 WSL Integration 的 Docker Desktop。
+构建依赖只安装进容器；源码、下载与工具链保存在独立 Docker 卷 `ax6000-openwrt-build`，
+宿主目录 `build-output` 保存结果，不向宿主安装编译器、QEMU 或包管理依赖。
 
 ```bash
-# 在本仓库根目录执行；Ubuntu x86_64 的构建依赖：
-sudo apt-get update
-sudo apt-get install -y build-essential clang flex bison g++ gawk \
-  gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
-  python3-setuptools python3-dev libelf-dev rsync swig unzip zlib1g-dev \
-  file wget curl ca-certificates subversion time jq
-
-CUSTOM_DIR="$PWD"
-source sources.lock
-git clone --depth=1 --branch "$OPENWRT_REF" "$OPENWRT_URL" openwrt
-test "$(git -C openwrt rev-parse HEAD)" = "$OPENWRT_COMMIT"
-cd openwrt
-bash "$CUSTOM_DIR/diy-part1.sh"
-cp "$CUSTOM_DIR/.config" .config
-cp -a "$CUSTOM_DIR/files" .
-make defconfig
-make download -j8
-make -j"$(nproc)" || make -j1 V=s
+./scripts/ci-local.sh check       # 容器内静态检查与安全门禁测试
+./scripts/ci-local.sh all         # 顺序构建三种镜像并打包
+./scripts/ci-local.sh package     # 已有三种产物时重新打包
 ```
 
-ARM64 Ubuntu 不安装仅适用于 x86 的 multilib 包。请像工作流一样确认 `defconfig`
-未丢失所选包、安装 symlink 的实际提供者和最终配置，不能只看命令退出码。
-脚本可重复执行而不重复追加 feed；不支持在来源不明、已有包覆盖的旧构建树上混搭。
+也可单独使用 `./scripts/ci-local.sh stock`、`ubootmod` 或 `recovery` 重编一个目标。
+补齐三种产物后再打包；源码不一致时会拒绝混包。默认 8 路并发，可通过 `BUILD_JOBS` 调整。
+完整首次构建可能持续数小时，后两种布局会复用同一锁定源码、下载和大部分编译缓存。
+不在同一构建卷并发更换配置；构建驱动使用锁避免相互覆盖。
+GitHub Actions 使用相同的 `scripts/build.sh`，在隔离 runner 上安装 Ubuntu 官方构建依赖。
+本地缓存不会在发布前自动升级 source lock；不支持混入来源不明的旧构建树。
 
 ## 首次启动与无网线初始化
 
 | 项目 | 默认值 |
 | --- | --- |
-| LAN / LuCI | `192.168.10.1` |
+| LAN / LuCI | `192.168.10.1/24`（浏览器访问 `192.168.10.1`） |
+| DHCPv4 | 开启，`192.168.10.100` 起，共 150 个地址，租期 12 小时 |
+| SSH | 默认启动，LAN `22` 端口，`ssh -p 22 root@192.168.10.1` |
+| ttyd | 默认启动，LAN `7681` 端口，自动登录 root |
 | 2.4 GHz SSID | `Openwrt` |
 | 5 GHz SSID | `Openwrt5G` |
 | 两个 SSID 的密码 | `12345678` |
@@ -140,6 +133,14 @@ ARM64 Ubuntu 不安装仅适用于 x86 的 multilib 包。请像工作流一样�
 固定密码并非安全部署建议，初始化后应自行改密；无线可用性仍须实机验证。
 Wi-Fi 密码不是管理密码；本项目不硬编码 root 管理密码。
 首次登录后应立即设置独立的 LuCI / SSH root 密码，不要把 LuCI、SSH 或 ttyd 映射到 WAN。
+
+访问初始化脚本明确写入 `network.lan.ipaddr=192.168.10.1/24`、删除旧 netmask 并开启 DHCP，
+修复裸地址在缺少掩码时按 /32 处理的问题。SSH 保留密码/密钥认证，不写入共享密码；
+恢复配置中已有的 Dropbear/ttyd 实例会统一限制在 LAN，只启用第一个，避免多个相同端口实例冲突。
+
+**ttyd 自动登录使用 `/bin/login -f root`，LAN 内任何客户端都能直接访问 7681 获取 root，
+不受 LuCI 登录保护。** 只在可信家庭 LAN 使用；如需恢复终端二次登录，在 ttyd 设置将命令改为 `/bin/login`。
+默认关闭 URL 参数并检查 WebSocket Origin；这些选项不能代替用户认证。
 
 初始化脚本先设置 LAN，再根据无线设备的 `band` 和 AP 的 `device/mode` 关系设置双频，
 不依赖 section 数组顺序。缺少任一频段的 AP、必要 UCI 写入或提交失败时返回非零，
@@ -200,7 +201,7 @@ PassWall 2 未启用时系统仍使用普通 DNS，普通客户端查询不会�
 - 保留软硬件流量卸载：FW4 在 forward 链加速转发流量，REDIRECT/TPROXY 接管的流量走本地代理，
   不能仅因存在代理就认定必须关闭卸载；实际硬件效果仍待实机验证。
 - 保留 UPnP 包及上游默认配置，不擅自启用服务；没有发现必须卸载它的源码级冲突。
-  ttyd 保持 LAN 接口和 `/bin/login`，不扩大到 WAN。
+  ttyd 仅绑定 LAN，按用户选择使用 `/bin/login -f root` 自动登录；其访问权限见上文。
 - Argon 背景保留项只追加一次，即使原 `/etc/sysupgrade.conf` 最后一行没有换行，也不会合并破坏旧保留项。
 
 ## nlbwmon 流量统计
@@ -225,12 +226,57 @@ PassWall 2 未启用时系统仍使用普通 DNS，普通客户端查询不会�
   旧 PassWall 节点资料保留供手动迁移，不自动转换、启用或删除。不要恢复旧 feeds / 独立 Argon 插件。
   升级前备份并准备与 stock 分区匹配的恢复手段，旧备份不能替代新默认值验收。
 
-## 验证状态
+## 本轮访问修复与双布局交付
+
+- 将裸 LAN IP 改为明确的 `/24`，删除可能残留的错误掩码并明确 DHCP 服务。
+- Dropbear 默认启用、LAN 22；ttyd 默认启用、LAN 7681、root 自动登录，均检查必要 UCI 提交与开机启用失败。
+- stock、完整 ubootmod、精简 recovery 分别解析依赖、检查实际 manifest、校验镜像身份和独立资源预算。
+- 新增分阶段迁移、原始分区备份与 ubootmod 救援脚本；默认只检查，写入需显式参数。
+- [迁移与恢复指导](docs/ubootmod.md) 说明适用条件、TFTP、内存/闪存预算与无法保证一键回原厂的限制。
+
+2026-10-24 已在 Docker 内完成真实 feeds/defconfig、完整 stock、完整 ubootmod 和精简 recovery 构建。
+实际 manifest、设备标识、镜像内初始化脚本、UBI 容量模型及全部 SHA-256 检查通过。
+三个 profile 的配置输入摘要一致；本地固件在提交前编译，`build-sources.json` 如实记录工作树有改动的状态。
+
+| 镜像 | 实际文件大小 | 扣除 UBI 预留后的逻辑数据容量 |
+| --- | ---: | ---: |
+| stock sysupgrade `.bin` | 72,714,544 字节，69.35 MiB | 10,792,960 字节，10.29 MiB；门槛 8 MiB |
+| ubootmod sysupgrade `.itb` | 74,354,998 字节，70.91 MiB | 27,807,744 字节，26.52 MiB；已计入两个 1 MiB 环境卷及 16 MiB recovery，门槛 16 MiB |
+| 精简 recovery FIT | 8,912,896 字节，8.50 MiB | 放入预留的 16 MiB 恢复卷 |
+| 精简 factory UBI | 10,223,616 字节，9.75 MiB | 通过 stock 30 MiB 迁移分区的独立检查 |
+
+这些数据容量**尚未扣除 UBIFS 文件系统开销，也不是实机 `df`**。ubootmod 的空间增加来自分区布局；
+其 FIT 使用 gzip 内核封装，文件本身略大于 stock。stock 的 root 负载仍为 68,198,400 字节，
+本轮没有增加日常插件或删减原先保留的核心。精简恢复环境的普通文件合计 21,803,109 字节（解压后），
+其中 `mtd-rw.ko` 为 5,312 字节；其独立压缩增量及实机加载内存尚未单独测量，不将解压文件大小当作启动 RAM 峰值。
+
+本轮实际验证：
+
+- ShellCheck、actionlint 和 14 项离线容量/迁移测试通过。覆盖错位分区、损坏或异机备份、缺少确认、
+  格式化失败、持久根文件系统、错误升级镜像、BL2 回读失败后停止，以及救援仅执行正式升级的边界。
+- 从两种正式镜像和实际 recovery FIT ramdisk 运行真实 BusyBox/UCI；验证 `/24`、DHCP、倒序双频、
+  LAN 监听设置、重复执行幂等、必要提交失败及重试。完整镜像覆盖 network/dhcp/dropbear/ttyd/system/wireless 六组，
+  recovery 覆盖除 ttyd 外的五组。三种镜像 BusyBox 二进制的 SHA-256 相同，实际验证迁移所用 hexdump/head 参数可用。
+- 真实 Dropbear 完成密钥认证及远程命令；两种正式镜像的 ttyd WebSocket 完成自动 root 登录和命令执行。
+  服务测试使用容器内回环高端口，UCI 中默认端口仍为 LAN SSH 22、ttyd 7681。
+- 三种镜像各用实际 dnsmasq 与 BusyBox udhcpc 完成广播 DHCPv4 的 DISCOVER → OFFER → REQUEST → ACK，
+  核对租约位于 `192.168.10.100–249`、掩码 `255.255.255.0`、网关 `192.168.10.1`。
+  测试使用 `--network none` 容器内的 veth；为让 QEMU 的原始套接字收到完整校验和，关闭该测试 veth 的校验和卸载。
+  固件原有的软硬件流量卸载配置保留。可用 `./scripts/test-dhcp.sh stock`（或 `ubootmod` / `recovery`）复验。
+- 三份交付归档及各自内部校验清单均已核验；构建产物位于忽略提交的 `build-output/release`。
+
+未连接或刷写路由器；无线、WAN、PPE、UBIFS 实际余量、峰值 RAM、长期稳定性、BL2/FIP 写入和 TFTP 救砖仍须真机验收。
+迁移脚本的离线测试不等于已经在 NAND 上验证写入或回滚。下方链接和旧镜像数据为历史记录。
+
+本轮 stock SHA-256：`86c9f2448a6376b00ebbaf118509e50edade0003cbce2f850791cba587a5039f`。
+ubootmod SHA-256：`1765829f01bd47360c63ee0ffed453fb605c57201067f49868c33200fbf6b8ee`。
+
+## 历史验证记录
 
 本次修改针对已复现的构建/配置错误与升级兼容性。此前使用中的未知现象没有日志或实机证据，
 不能据此声称找到根因或“稳定性已修复”。
 
-### 本轮：家庭资源约束、腾讯公网 NTP、nlbwmon
+### 上一轮：家庭资源约束、腾讯公网 NTP、nlbwmon
 
 - 已新增 `AGENTS.md`；按用户选择保留原代理核心与 MosDNS，只增加 nlbwmon，不打包 AdGuard Home。
 - shell 语法、ShellCheck、actionlint、真实 Linux feeds/defconfig 和工作流原样依赖检查已通过；
@@ -254,8 +300,8 @@ PassWall 2 未启用时系统仍使用普通 DNS，普通客户端查询不会�
 
 ### 既有 PassWall 2 / MosDNS 验证范围
 
-本轮 Xray、Sing-box、V2Ray、Hysteria、MosDNS 二进制分别与[上一轮构建](https://github.com/Zander-1024/Redmi-AX6000-Openwrt/actions/runs/39916403287)
-逐一核对 SHA-256 一致。以下是上一轮已执行的行为验证，不冒充本轮重新执行：
+2026-10-23 构建中的 Xray、Sing-box、V2Ray、Hysteria、MosDNS 二进制分别与[更早构建](https://github.com/Zander-1024/Redmi-AX6000-Openwrt/actions/runs/39916403287)
+逐一核对 SHA-256 一致。以下为当时已执行的代理与 DNS 行为验证；本次访问修复没有重跑整套代理流量场景：
 
 - 真实初始化器通过正常/倒序双频、无末尾换行保留项、缺失频段/服务配置、九个包提交失败、
   重试和连续执行；旧节点资料及同名真实节点保留，旧客户端/firewall/tracker 接管项被禁用或移除。
@@ -269,7 +315,7 @@ PassWall 2 未启用时系统仍使用普通 DNS，普通客户端查询不会�
 - Update Checker 此前实际运行已验证源码 SHA，但因缺少专用 `ACTIONS_TRIGGER_PAT` 失败且未保存触发缓存；
   未宣称跨工作流 dispatch 已通过。
 
-### 本轮发布镜像与容量
+### 上一轮发布镜像与容量
 
 文件：`openwrt-mediatek-filogic-xiaomi_redmi-router-ax6000-stock-squashfs-sysupgrade.bin`。
 
@@ -290,7 +336,7 @@ SHA-256：
 本轮未连接或刷写路由器，未提供真实外部代理节点；这些编译、容器和网页证据不能替代实机 WAN、无线、
 硬件卸载准确性、峰值内存或长期稳定性验收。
 
-### 设备验收清单
+## 设备验收清单
 
 确认分区匹配、备份完成且具备恢复手段后，使用干净配置分别验收：
 

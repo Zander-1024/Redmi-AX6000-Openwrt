@@ -3,7 +3,7 @@
 ## 设备与用途
 
 - 这是中国大陆家庭使用的 Redmi Router AX6000 OpenWrt 固件，不是云服务器或通用 Linux 主机。
-- 目标固定为 `mediatek/filogic/xiaomi_redmi-router-ax6000-stock`。不得擅自切换 ubootmod、扩大分区或建议强制刷写。
+- 默认目标为 `mediatek/filogic/xiaomi_redmi-router-ax6000-stock`。用户本轮明确授权额外构建官方 `xiaomi_redmi-router-ax6000-ubootmod`、精简迁移恢复镜像和配套脚本文档；保留 stock，不在设备上执行迁移，不建议强制刷写。两种布局分别检查设备标识、镜像格式和容量。
 - 该机型为 512 MiB RAM、128 MiB NAND；stock 的 `ubi_kernel` 为 30 MiB、`ubi` 为 80 MiB。总闪存容量不等于 rootfs 可用容量，以机型资料和锁定 DTS 为依据。
 
 ## 资源预算是验收条件
@@ -29,6 +29,7 @@
 - 用户明确为局域网初始化便利保留 Wi-Fi 密码 `12345678`；不得擅自关闭无线或改成必须有线初始化。说明初始化后应改密。
 - 保留 CN、自动信道、WPA2-CCMP、5 GHz HE160 和现有 802.11r。无实机证据时不将这些设置认定为故障根因。
 - 不硬编码共享的 root/插件管理密码，不向 WAN 开放 LuCI、SSH、ttyd 或插件管理界面。
+- 用户本轮选择 ttyd 自动登录 root，仅绑定 LAN；这意味着 LAN 客户端可绕过 LuCI 直接连接终端，文档必须明确。SSH 默认开启、LAN 22 端口，认证保留。
 - DNS 插件不能争抢同一监听地址/端口或形成转发环路；保留 DHCP 和本地域名解析。插件未配置完成时不得导致全家断网。
 - 不为流量统计盲目关闭软硬件卸载；先核对统计机制，记录可能的误差并以真机验收为准。
 

@@ -60,7 +60,9 @@ jobs:
           sudo apt-get install -y build-essential clang flex bison g++ gawk \
             gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
             python3-setuptools python3-dev libelf-dev rsync swig unzip \
-            zlib1g-dev file wget curl ca-certificates subversion time jq
+            zlib1g-dev file wget curl ca-certificates subversion time jq \
+            squashfs-tools u-boot-tools device-tree-compiler qemu-user-static proot shellcheck \
+            python3-websocket openssh-client bsdextrautils
           sudo apt-get clean
           sudo timedatectl set-timezone "$TZ"
           sudo mkdir -p /workdir
@@ -76,56 +78,6 @@ jobs:
           test "$(git -C openwrt rev-parse HEAD)" = "$OPENWRT_COMMIT"
           ln -s /workdir/openwrt "$GITHUB_WORKSPACE/openwrt"
 
-      - name: Integrate locked package sources
-        working-directory: openwrt
-        run: bash "$GITHUB_WORKSPACE/diy-part1.sh"
-
-      - name: Resolve and verify package configuration
-        run: |
-          cp -a files openwrt/files
-          cp .config openwrt/.config
-          make -C openwrt defconfig
-          python3 - <<'PY'
-          from pathlib import Path
-          requested = {s for s in Path('.config').read_text().splitlines()
-                       if s.startswith('CONFIG_') and s.endswith('=y')}
-          final = set(Path('openwrt/.config').read_text().splitlines())
-          missing = requested - final
-          if missing:
-              raise SystemExit('Required options lost by defconfig: ' + ', '.join(sorted(missing)))
-          for feed in ('passwall_packages', 'passwall2', 'mosdns'):
-              assert f'# CONFIG_FEED_{feed} is not set' in final, feed
-          devices = [s for s in final if s.startswith('CONFIG_TARGET_')
-                     and '_DEVICE_' in s and s.endswith('=y')]
-          assert devices == ['CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_redmi-router-ax6000-stock=y'], devices
-          assert 'CONFIG_USE_APK=y' in final
-          assert 'CONFIG_PACKAGE_luci-app-passwall2=y' in final
-          assert 'CONFIG_PACKAGE_luci-app-passwall=y' not in final
-          providers = {
-              'luci-app-passwall2': 'passwall2/luci-app-passwall2',
-              'sing-box': 'passwall_packages/sing-box',
-              'xray-core': 'passwall_packages/xray-core',
-              'hysteria': 'passwall_packages/hysteria',
-              'v2ray-plugin': 'passwall_packages/v2ray-plugin',
-              'v2ray-geodata': 'passwall_packages/v2ray-geodata',
-              'mosdns': 'mosdns/mosdns',
-              'geo2txt': 'mosdns/geo2txt',
-              'v2ray-core': 'packages/net/v2ray-core',
-              'nlbwmon': 'packages/net/nlbwmon',
-              'luci-app-nlbwmon': 'luci/applications/luci-app-nlbwmon',
-          }
-          root = Path('openwrt').resolve()
-          for package, source in providers.items():
-              feed = source.split('/')[0]
-              installed = root / 'package/feeds' / feed / package
-              assert installed.is_symlink() and installed.resolve() == root / 'feeds' / source, package
-              print(f'{package}: {installed.resolve()}')
-          metadata = (root / 'feeds/passwall_packages.tmp/.packageinfo').read_text()
-          xray = next(s for s in metadata.split('Source-Makefile:') if '\nPackage: xray-core\n' in s)
-          assert 'Build-Depends: golang1.27/host\n' in xray
-          print('Required packages, stock layout, APK feeds and Xray Go 1.27 verified')
-          PY
-
       - name: SSH connection to Actions
         if: github.event_name == 'workflow_dispatch' && inputs.ssh
         uses: P3TERX/ssh2actions@71006b93bff498b020448ac10964f8a5d0f9f32c # v1.0.0
@@ -133,110 +85,30 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
-      - name: Download packages
-        working-directory: openwrt
-        run: make download -j8
+      - name: Validate scripts and migration guards
+        run: BUILD_OUTPUT="$RUNNER_TEMP/ax6000-validation" bash scripts/build.sh check
 
-      - name: Compile firmware
+      - name: Compile and verify stock, ubootmod and minimal recovery
         id: compile
-        working-directory: openwrt
+        env:
+          OPENWRT_TREE: /workdir/openwrt
+          BUILD_OUTPUT: ${{ github.workspace }}/firmware
+          BUILD_JOBS: '8'
         run: |
-          make -j"$(nproc)" || make -j1 V=s
+          # Same driver as Docker; each profile has its own resolved config,
+          # manifest, identity checks, partition gate and provenance.
+          bash scripts/build.sh all
           echo 'status=success' >> "$GITHUB_OUTPUT"
 
       - name: Check disk usage
         if: always()
         run: df -hT
 
-      - name: Organize verified stock firmware and provenance
+      - name: Package verified layouts and migration bundle
         id: organize
         if: success() && steps.compile.outputs.status == 'success'
         run: |
-          shopt -s nullglob
-          target=openwrt/bin/targets/mediatek/filogic
-          images=("$target"/*-xiaomi_redmi-router-ax6000-stock-squashfs-sysupgrade.bin)
-          manifests=("$target"/*-xiaomi_redmi-router-ax6000-stock.manifest)
-          test "${#images[@]}" -eq 1
-          test "${#manifests[@]}" -eq 1
-          test -s "${images[0]}"
-          test -s "${manifests[0]}"
-          python3 - "${manifests[0]}" <<'PY'
-          import sys
-          from pathlib import Path
-          packages = dict(line.split(' - ', 1) for line in Path(sys.argv[1]).read_text().splitlines())
-          required = {
-              'luci-app-passwall2', 'xray-core', 'sing-box', 'hysteria',
-              'v2ray-core', 'v2ray-plugin', 'mosdns', 'geo2txt',
-              'v2ray-geoip', 'v2ray-geosite', 'luci-theme-argon',
-              'wpad-mbedtls', 'apk-mbedtls', 'luci-app-package-manager',
-              'luci-app-ddns', 'luci-app-upnp', 'luci-app-ttyd', 'firewall4',
-              'nlbwmon', 'luci-app-nlbwmon', 'luci-i18n-nlbwmon-zh-cn',
-          }
-          required.update(
-              s.removeprefix('CONFIG_PACKAGE_').removesuffix('=y')
-              for s in Path('.config').read_text().splitlines()
-              if s.startswith('CONFIG_PACKAGE_ddns-scripts') and s.endswith('=y')
-          )
-          missing = required - packages.keys()
-          forbidden = {
-              'luci-app-passwall', 'luci-app-argon-config', 'opkg',
-              'adguardhome', 'luci-app-adguardhome',
-          } & packages.keys()
-          forbidden.update(p for p in packages if p.startswith('wpad-basic'))
-          if missing or forbidden:
-              raise SystemExit(f'Invalid firmware package set: missing={sorted(missing)}, forbidden={sorted(forbidden)}')
-          print('PassWall 2 and required services verified in the actual image manifest')
-          PY
-          python3 - "${images[0]}" <<'PY'
-          import math
-          import sys
-          import tarfile
-          from pathlib import PurePosixPath
-          # Stock DTS: 30 MiB ubi_kernel, 80 MiB ubi; 128 KiB PEB, 2 KiB pages.
-          # Reserve UBI layout/WL/atomic PEBs and the default bad-block allowance.
-          peb, leb = 128 * 1024, 124 * 1024
-          with tarfile.open(sys.argv[1]) as image:
-              for name, limit in (('kernel', 30 * 1024**2), ('root', 80 * 1024**2)):
-                  members = [m for m in image.getmembers()
-                             if m.isfile() and PurePosixPath(m.name).name == name]
-                  assert len(members) == 1, (name, members)
-                  payload = members[0].size
-                  blocks = limit // peb
-                  reserve = 4 + math.ceil(blocks * 20 / 1024)
-                  # This user-selected profile must retain at least 8 MiB of
-                  # data capacity, not merely one rootfs_data erase block.
-                  data_blocks = math.ceil(8 * 1024**2 / leb) if name == 'root' else 0
-                  required = math.ceil(payload / leb) + reserve + data_blocks
-                  assert 0 < payload and required <= blocks, (name, payload, required, blocks)
-                  print(f'{name}: {payload} bytes; conservative UBI PEBs {required}/{blocks}; '
-                        f'data budget {data_blocks * leb} bytes')
-          PY
-          (cd "$target" && sha256sum -c sha256sums)
-          mkdir firmware
-          # Only the stock sysupgrade has passed the partition gate. Do not
-          # publish oversized initramfs/factory images or generic BL2 binaries.
-          rsync -a --include='*-stock-squashfs-sysupgrade.bin' \
-            --include='*.manifest' --include='*.buildinfo' --include=profiles.json \
-            --exclude='*' "$target/" firmware/
-          # GitHub assets and common download filesystems cannot distinguish
-          # sha256sums from SHA256SUMS. Give the upstream list a distinct name.
-          cp "$target/sha256sums" firmware/upstream-sha256sums
-          cp sources.lock firmware/sources.lock
-          cp .config firmware/requested.config
-          cp openwrt/.config firmware/final.config
-          {
-            printf 'configuration=%s\n' "$GITHUB_SHA"
-            printf 'openwrt=%s\n' "$(git -C openwrt rev-parse HEAD)"
-            printf 'argon=%s\n' "$(git -C openwrt/package/luci-theme-argon rev-parse HEAD)"
-            while read -r type name source; do
-              [[ "$type" == src-git ]] || continue
-              actual=$(git -C "openwrt/feeds/$name" rev-parse HEAD)
-              test "$actual" = "${source##*^}"
-              printf '%s=%s\n' "$name" "$actual"
-            done < openwrt/feeds.conf.default
-            printf 'xray-core host dependency=golang1.27/host\n'
-          } > firmware/build-sources.txt
-          (cd firmware && sha256sum -- * > SHA256SUMS)
+          (cd firmware/release && sha256sum -c SHA256SUMS)
           echo 'status=success' >> "$GITHUB_OUTPUT"
 
       - name: Upload optional bin directory
@@ -252,7 +124,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: OpenWrt_firmware_ax6000-passwall2-${{ github.run_id }}-${{ github.run_attempt }}
-          path: firmware/*
+          path: firmware/release/*
           if-no-files-found: error
 
       - name: Generate unique release tag
@@ -260,7 +132,7 @@ jobs:
         if: success() && steps.compile.outputs.status == 'success' && steps.organize.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
         run: |
           echo "release_tag=ax6000-passwall2-${OPENWRT_REF}-$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-          printf 'OpenWrt %s with PassWall 2, stock Redmi AX6000 partition layout.\n\nSource: %s\nConfiguration: %s\n\nSee sources.lock, build-sources.txt, final.config, manifest and SHA256SUMS in the assets. Hardware acceptance is separate from compilation.\n' \
+          printf 'OpenWrt %s with PassWall 2, Redmi AX6000 stock and official OpenWrt U-Boot layouts. See migration-and-recovery.md before changing layouts.\n\nSource: %s\nConfiguration: %s\n\nArchives include sources.lock, build-sources.json, final.config, manifest, capacity.json and SHA256SUMS. The migration archive includes a separate small recovery image and bootloader files. Never cross-flash stock and ubootmod sysupgrade images. Hardware acceptance is separate from compilation.\n' \
             "$OPENWRT_REF" "$OPENWRT_COMMIT" "$GITHUB_SHA" > release.txt
 
       - name: Upload firmware to draft release
@@ -271,7 +143,7 @@ jobs:
           tag_name: ${{ steps.tag.outputs.release_tag }}
           target_commitish: ${{ github.sha }}
           body_path: release.txt
-          files: firmware/*
+          files: firmware/release/*
           fail_on_unmatched_files: true
           draft: true
 

@@ -35,7 +35,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .dispatch-trigger
-          key: dispatch-${{ steps.source.outputs.sha }}-${{ hashFiles('sources.lock', '.config', 'diy-part1.sh', 'files/**', '.github/workflows/build-openwrt.yml', '.github/workflows/update-checker.yml') }}
+          key: dispatch-${{ steps.source.outputs.sha }}-${{ hashFiles('sources.lock', '.config', 'diy-part1.sh', 'files/**', 'configs/**', 'scripts/**', 'docker/**', 'docs/**', '.github/workflows/build-openwrt.yml', '.github/workflows/update-checker.yml') }}
 
       - name: Trigger locked firmware build
         if: success() && steps.cache.outputs.cache-hit != 'true'

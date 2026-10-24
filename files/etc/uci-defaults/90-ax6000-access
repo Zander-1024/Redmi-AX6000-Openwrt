@@ -1,0 +1,155 @@
+#!/bin/sh
+# OpenWrt uses BusyBox ash; local variables follow the dash/ash shell dialect.
+# shellcheck shell=dash
+# OpenWrt deletes this file only after exit 0. Every required write/commit is
+# checked explicitly: boot sources defaults inside a conditional (set -e is unsafe).
+# shellcheck source=/dev/null
+. /lib/functions.sh || exit 1
+
+# Apply a group of UCI assignments; return nonzero on the first failed write.
+set_options() {
+    local assignment
+    for assignment in "$@"; do
+        uci set "$assignment" || {
+            echo "zzz-custom: cannot set $assignment" >&2
+            return 1
+        }
+    done
+}
+
+# Remove an obsolete option if present; a failed deletion must remain retryable.
+delete_option() {
+    if uci -q get "$1" >/dev/null 2>&1; then
+        uci -q delete "$1" || return 1
+    fi
+    return 0
+}
+
+# Explicit CIDR avoids netifd treating a bare address as /32. Remove a saved
+# netmask so a config-preserving upgrade cannot retain a conflicting mask.
+set_options 'network.lan.proto=static' 'network.lan.ipaddr=192.168.10.1/24' || exit 1
+delete_option network.lan.netmask || exit 1
+uci commit network || exit 1
+set_options 'dhcp.lan=dhcp' 'dhcp.lan.interface=lan' 'dhcp.lan.ignore=0' \
+    'dhcp.lan.start=100' 'dhcp.lan.limit=150' 'dhcp.lan.leasetime=12h' || exit 1
+uci commit dhcp || exit 1
+
+# Normalize existing instances as well: retained WAN listeners must not survive.
+config_load dropbear || exit 1
+dropbear_failed=0
+dropbear_count=0
+configure_dropbear() {
+    local section="$1"
+    dropbear_count=$((dropbear_count + 1))
+    local enabled=0
+    [ "$dropbear_count" -ne 1 ] || enabled=1
+    set_options "dropbear.$section.enable=$enabled" "dropbear.$section.Interface=lan" \
+        "dropbear.$section.Port=22" "dropbear.$section.PasswordAuth=on" \
+        "dropbear.$section.RootPasswordAuth=on" "dropbear.$section.RootLogin=1" \
+        "dropbear.$section.GatewayPorts=off" || dropbear_failed=1
+    delete_option "dropbear.$section.DirectInterface" || dropbear_failed=1
+}
+config_foreach configure_dropbear dropbear
+[ "$dropbear_count" -gt 0 ] && [ "$dropbear_failed" -eq 0 ] || exit 1
+uci commit dropbear || exit 1
+/etc/init.d/dropbear enable || exit 1
+
+# ttyd is absent only in the deliberately minimal recovery build. Autologin
+# grants root to ANY LAN client, including access outside the LuCI iframe.
+if [ -x /usr/bin/ttyd ]; then
+    config_load ttyd || exit 1
+    ttyd_failed=0
+    ttyd_count=0
+    configure_ttyd() {
+        local section="$1"
+        ttyd_count=$((ttyd_count + 1))
+        local enabled=0
+        [ "$ttyd_count" -ne 1 ] || enabled=1
+        set_options "ttyd.$section.enable=$enabled" "ttyd.$section.interface=@lan" \
+            "ttyd.$section.port=7681" "ttyd.$section.command=/bin/login -f root" \
+            "ttyd.$section.url_arg=0" "ttyd.$section.readonly=0" \
+            "ttyd.$section.check_origin=1" || ttyd_failed=1
+        delete_option "ttyd.$section.url_override" || ttyd_failed=1
+        delete_option "ttyd.$section.credential" || ttyd_failed=1
+    }
+    config_foreach configure_ttyd ttyd
+    [ "$ttyd_count" -gt 0 ] && [ "$ttyd_failed" -eq 0 ] || exit 1
+    uci commit ttyd || exit 1
+    /etc/init.d/ttyd enable || exit 1
+fi
+
+# Mainland home routers use public NTP, not cloud-private endpoints. Keep the
+# upstream cron logging defaults and generated stable APK feeds unchanged.
+delete_option 'system.@system[0].init' || exit 1
+set_options \
+    'system.@system[0].zonename=Asia/Shanghai' \
+    'system.@system[0].timezone=CST-8' \
+    'system.@system[0].conloglevel=7' \
+    'system.ntp=timeserver' \
+    'system.ntp.enabled=1' \
+    'system.ntp.enable_server=0' || exit 1
+delete_option 'system.ntp.server' || exit 1
+for server in ntp.tencent.com ntp1.tencent.com ntp2.tencent.com; do
+    uci add_list "system.ntp.server=$server" || exit 1
+done
+uci commit system || exit 1
+config_load wireless || exit 1
+aps_2g=
+aps_5g=
+
+# Collect APs by their device's band, never by section order. config_foreach
+# does not aggregate callback failures, so validate both bands before writing.
+# shellcheck disable=SC2329 # Invoked indirectly by config_foreach.
+collect_ap() {
+    local section="$1" device mode band
+    config_get mode "$section" mode
+    [ "$mode" = ap ] || return 0
+    config_get device "$section" device
+    config_get band "$device" band
+    case "$band" in
+        2g) aps_2g="${aps_2g:+$aps_2g }$section" ;;
+        5g) aps_5g="${aps_5g:+$aps_5g }$section" ;;
+    esac
+}
+config_foreach collect_ap wifi-iface
+[ -n "$aps_2g" ] && [ -n "$aps_5g" ] || {
+    echo 'zzz-custom: need both 2.4 GHz and 5 GHz AP sections; retry next boot' >&2
+    exit 1
+}
+
+# Configure each related AP; return nonzero if any required setting fails.
+configure_ap() {
+    local section="$1" device band ssid
+    config_get device "$section" device
+    config_get band "$device" band
+    case "$band" in
+        2g) ssid=Openwrt ;;
+        5g) ssid=Openwrt5G ;;
+        *) return 1 ;;
+    esac
+    # 用户为局域网、无网线首次初始化便利明确保留固定密码 12345678。
+    # 后续维护不得擅自关闭无线或改成依赖有线初始化；建议初始化后自行改密。
+    set_options \
+        "wireless.$device.disabled=0" \
+        "wireless.$device.country=CN" \
+        "wireless.$device.channel=auto" \
+        "wireless.$section.disabled=0" \
+        "wireless.$section.ssid=$ssid" \
+        "wireless.$section.encryption=psk2+ccmp" \
+        "wireless.$section.key=12345678" \
+        "wireless.$section.ieee80211r=1" \
+        "wireless.$section.mobility_domain=1111" \
+        "wireless.$section.reassociation_deadline=20000" \
+        "wireless.$section.ft_over_ds=0" \
+        "wireless.$section.ft_psk_generate_local=1" || return 1
+    if [ "$band" = 5g ]; then
+        set_options "wireless.$device.htmode=HE160" || return 1
+    fi
+    return 0
+}
+for ap in $aps_2g $aps_5g; do
+    configure_ap "$ap" || exit 1
+done
+uci commit wireless || exit 1
+
+exit 0
