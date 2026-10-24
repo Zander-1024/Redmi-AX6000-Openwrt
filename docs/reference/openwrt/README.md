@@ -34,7 +34,7 @@
 | 步骤 6：清除 pstore，避免进入 NAND/TFTP recovery | `install` 清理崩溃记录；同样的启动条件也适用于 `recover` | 本次修复将清理覆盖到恢复路径；检查模式和缺少确认时不得删除记录 |
 | 步骤 7：重新格式化 UBI，创建 ID 0/1 的两个 128 KiB 环境卷 | ID/名称相同，各预留 1 MiB | 有意扩大；锁定 U-Boot 的 `ubi_create_env` 同样使用 `0x100000`，容量模型计入两卷；卷大小不是环境数据长度 |
 | 步骤 8：可选 NAND recovery，示例为 10 MiB，可按镜像扩大 | 必建 ID 2 的 16 MiB recovery 卷，写入精简 FIT | 符合官方可调大小规则；项目额外提供离线恢复卷，并纳入预算 |
-| 步骤 9：依次写 preloader 到 BL2、FIP 到 FIP | 相同顺序，写后增加回读校验 | 主流程一致；当前回读的 NAND 坏块处理仍有待修问题，见下文 |
+| 步骤 9：依次写 preloader 到 BL2、FIP 到 FIP | 相同顺序，写后增加回读校验 | 主流程一致；以 `mtd dump` 跳过坏块后截取等长数据并校验 SHA-256 |
 | 步骤 10：`sysupgrade -n` 安装 ubootmod `.itb` | 先 `sysupgrade -T`，最终 `sysupgrade -n`，不使用 `-F` | 与实际命令一致；官方步骤文字称 `.bin`，命令实际使用 `.itb`，本项目依据镜像规则使用后者 |
 | Debricking：电脑 `192.168.1.254` 提供指定名称的 recovery `.itb` | 保留该地址和完整文件名；Linux 启动后使用 `192.168.10.1` | 一致；U-Boot 的路由器地址 `192.168.1.1` 从锁定引导源码核对，不能混用后面的 OEM `192.168.31.*` 恢复教程 |
 
@@ -50,19 +50,25 @@
 - [镜像生成规则](https://github.com/openwrt/openwrt/blob/64900e756efa667774214f9c6b17c113222e01f7/target/linux/mediatek/image/filogic.mk)
 - [U-Boot 环境、pstore 分支及 TFTP 设置](https://github.com/openwrt/openwrt/blob/64900e756efa667774214f9c6b17c113222e01f7/package/boot/uboot-mediatek/patches/431-add-xiaomi_redmi-ax6000.patch)
 
-## 尚未关闭的问题
+## 脚本修正与验证边界
 
-本次只修复 `recover` 遗留 pstore 的问题。以下两项仍须另行修复，不能因官方流程核对通过而视为已解决：
+- `install` / `recover` 在升级前清理 pstore；检查模式保留记录，未挂载 pstore 或删除失败时拒绝继续。
+- 引导区使用 `mtd dump` 按完整擦除块跳过坏块，再截取镜像长度并校验 SHA-256；读取错误、短读或哈希不符均停止。
+  不使用 `mtd verify`（锁定源码不跳坏块），也不使用 `mtd -l 镜像长度 dump`（末尾部分块遇到坏块会失去对齐）。
+- 容量按整片 128 MiB NAND 预留 20 个坏块，另留 6 个 UBI 元数据块，包括 fastmap 的两块。
+  stock 的 NMBM master 可能较小，此计算更保守；fastmap autoconvert 默认关闭，不计启用后的额外池开销。
+- stock 失败计数按官方要求检查为非负整数且 >= 6，允许正常启动累加后的多位数。
 
-- 引导区 `mtd write` 跳过坏块，但 `head` 回读不会跳过；存在坏块时可能在已写 BL2 后误报失败并中止。
-- stock 容量模型按分区大小计算坏块预留，少于锁定内核按底层 MTD 大小计算的预留；现有 `capacity.json`
-  和 README 的历史余量数字偏乐观，不代表已满足真实设备的空间验收。
+2026-10-24 在迁移前的 stock 实机只读核对：NMBM 管理区从 120 MiB 开始，80 MiB UBI 实际预留
+19 个坏块、6 个元数据块；rootfs_data 卷为 77 LEB（9.32 MiB），当时 `df` 可用约 5.96 MiB。
+这也说明逻辑卷预算不能替代文件系统可用空间。BL2 的完整 `mtd dump` 与离机备份逐字节一致。
 
-没有执行实机迁移或刷机。完成坏块、实际 UBI/UBIFS 余量和恢复路径验收之前，不据此推荐设备迁移。
+离线测试覆盖坏块处于镜像首块及末尾部分块、短读、读取错误、回读不一致后停止，以及 pstore/格式化/容量门禁。
+其中 MTD、UBI、sysupgrade 使用测试替身；这些测试不能证明有坏块设备的 BootROM 或无线恢复能力。
+实际迁移和恢复路径仍须在目标设备验收。
 
-pstore 修复已通过 ShellCheck、actionlint 和 19 项离线测试；其中 16 项迁移测试也用实际构建的 recovery
-镜像内 BusyBox ash 重跑。测试先复现旧脚本漏清理，再验证清理发生在升级前，检查模式、缺少确认和无效镜像
-保留记录，未挂载 pstore 或删除失败时拒绝继续。MTD、UBI、sysupgrade 等设备操作使用测试替身，未触碰真实闪存。
+修正已通过 ShellCheck 和 23 项离线测试；18 项迁移测试另使用本次 GitHub recovery 镜像中的 BusyBox ash
+经 QEMU 重跑通过。已核对实际 FIT 设备标识、恢复 DTB、mtd-rw 模块、内置联网初始化脚本及固件配置输入哈希。
 
 ## 后续校验与更新
 

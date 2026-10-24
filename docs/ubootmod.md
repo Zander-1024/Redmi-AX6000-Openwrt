@@ -7,7 +7,7 @@ OpenWrt 官方 `xiaomi_redmi-router-ax6000-ubootmod`。不适用于 Qualcomm 小
 
 官方文档已保存为[仓库快照与逐项核对说明](https://github.com/Zander-1024/Redmi-AX6000-Openwrt/tree/main/docs/reference/openwrt)，附完整原文、U-Boot 安装章节、
 来源与许可。主流程与官方一致；环境卷大小、恢复卷大小和管理地址等项目差异在那里单独说明。
-其中记录的 NAND 坏块回读和容量模型问题仍待修复，尚不能据此推荐实机迁移。
+脚本按 NAND 坏块规则回读引导分区，容量模型按整片 128 MiB NAND 预留坏块，并计入 fastmap 元数据；仍须验收实际 UBI/UBIFS 余量和恢复路径。
 
 ## 空间变化与选择
 
@@ -17,7 +17,7 @@ OpenWrt 官方 `xiaomi_redmi-router-ax6000-ubootmod`。不适用于 Qualcomm 小
 | 官方 ubootmod | 从 `0x580000` 开始的 `ubi`，122.5 MiB | 两个 1 MiB 环境卷、16 MiB 恢复卷、正式 FIT、UBI 预留之外，至少 16 MiB 逻辑数据容量 |
 
 stock 不能用 128 MiB NAND 总容量衡量根分区余量。上一轮实测整包为 69.35 MiB、root 负载约 65.04 MiB，
-扣除模型预留后约剩 10.29 MiB，尚未扣 UBIFS 开销。nlbwmon 整轮增加仅 40 KiB；
+旧模型曾估算剩余 10.29 MiB；按整片 NAND 和 fastmap 修正后为 9.20 MiB，尚未扣 UBIFS 开销。nlbwmon 整轮增加仅 40 KiB；
 主要空间来自保留的 Xray、Sing-box、V2Ray、Hysteria、MosDNS 和规则数据，不能将涨幅归因于流量统计。
 没有更早镜像及 manifest，尚不能断言从四五十 MB 增长的逐项原因。
 

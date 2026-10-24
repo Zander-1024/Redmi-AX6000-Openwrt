@@ -176,14 +176,17 @@ case "$action" in
         [ "$(fw_printenv -n flag_boot_success)" = 1 ] || fail 'stock 启动成功标记不符'
         for key in flag_try_sys1_failed flag_try_sys2_failed; do
             v=$(fw_printenv -n "$key")
-            case "$v" in 6|7|8|9) ;; *) fail "$key 不符合已核对的 stock 启动策略";; esac
+            # Xiaomi increments this counter on subsequent boots; the official
+            # stock instructions require >= 6, not a single digit.
+            case "$v" in ''|*[!0-9]*) fail "$key 不是非负整数";; esac
+            [ "$v" -ge 6 ] 2>/dev/null || fail "$key 不符合已核对的 stock 启动策略"
         done
         ;;
     check-install|install)
         check_layout ubootmod
         check_backup
         ram_boot
-        for cmd in ubidetach ubiformat ubiattach ubimkvol ubiupdatevol mtd insmod; do need "$cmd"; done
+        for cmd in ubidetach ubiformat ubiattach ubimkvol ubiupdatevol mtd insmod mktemp head; do need "$cmd"; done
         module="/lib/modules/$(uname -r)/mtd-rw.ko"
         [ -f "$module" ] || fail '缺少与当前内核匹配的 mtd-rw 模块；使用本包精简 recovery'
         sysupgrade -T "$image" || fail '正式固件未通过 sysupgrade 检查'
@@ -199,7 +202,8 @@ case "$action" in
     stage-stock|install) [ "$#" -eq 2 ] && [ "$1" = --apply ] && [ "$2" = --backup-saved-off-router ] || fail '写入需要 --apply --backup-saved-off-router，并先在电脑验证备份';;
     recover) [ "$#" -eq 1 ] && [ "$1" = --apply ] || fail '恢复写入需要 --apply';;
 esac
-trap 'echo "写入中断：保留当前电源和 RAM 系统，不要盲目重启；按文档检查恢复路径。" >&2' EXIT
+readback=''
+trap '[ -z "$readback" ] || rm -rf "$readback"; echo "写入中断：保留当前电源和 RAM 系统，不要盲目重启；按文档检查恢复路径。" >&2' EXIT
 if [ "$action" = stage-stock ]; then
     attached=$(ubi_for_mtd "$kernelpart")
     [ -z "$attached" ] || ubidetach -p "/dev/$kernelpart"
@@ -238,7 +242,15 @@ if [ "$action" = install ]; then
         mtd write "$payload" "/dev/$dev"
         size=$(wc -c < "$payload")
         expected=$(sha256sum "$payload"); expected=${expected%% *}
-        actual=$(head -c "$size" "/dev/$dev" | sha256sum); actual=${actual%% *}
+        # mtd write skips bad NAND blocks. Dump complete eraseblocks using the
+        # same bad-block handling, THEN trim the regular file to payload size.
+        # mtd -l SIZE dump can lose alignment at a bad final partial block.
+        readback=$(mktemp -d /tmp/ax6000-readback.XXXXXX)
+        mtd dump "/dev/$dev" > "$readback/full.bin" || fail "$dev 回读失败"
+        [ "$(wc -c < "$readback/full.bin")" -ge "$size" ] || fail "$dev 回读长度不足"
+        head -c "$size" "$readback/full.bin" > "$readback/payload.bin" || fail "$dev 截取回读失败"
+        actual=$(sha256sum "$readback/payload.bin"); actual=${actual%% *}
+        rm -rf "$readback"
         [ "$expected" = "$actual" ] || fail "$dev 写入后回读不一致"
     done
 fi

@@ -8,16 +8,24 @@ MIB = 1024**2
 PEB, LEB = 128 * 1024, 124 * 1024
 RECOVERY_SIZE = 16 * MIB
 ENV_SIZE = MIB
+# Linux get_bad_peb_limit() uses the entire MTD master, not this partition.
+# Budget against all 128 MiB even on stock, whose NMBM master is smaller.
+# CONFIG_MTD_UBI_FASTMAP=y reserves two fastmap LEBs even with autoconvert off.
+NAND_SIZE = 128 * MIB
+BAD_BLOCK_RESERVE = math.ceil((NAND_SIZE // PEB) * 20 / 1024)
+UBI_METADATA_RESERVE = 4 + 2  # layout table, WL, atomic LEB change, fastmaps
 
 
 def budget(partition, payloads, minimum_data=0):
     blocks = partition // PEB
-    reserve = 4 + math.ceil(blocks * 20 / 1024)
+    reserve = UBI_METADATA_RESERVE + BAD_BLOCK_RESERVE
     used = sum(math.ceil(size / LEB) for size in payloads)
     available = (blocks - reserve - used) * LEB
     if any(size <= 0 for size in payloads) or available < minimum_data:
         raise ValueError(f'Capacity gate: {payloads=}, {available=}, {minimum_data=}')
     return dict(partition_bytes=partition, payload_bytes=payloads, reserve_pebs=reserve,
+                master_budget_bytes=NAND_SIZE, bad_block_reserve_pebs=BAD_BLOCK_RESERVE,
+                metadata_reserve_pebs=UBI_METADATA_RESERVE,
                 logical_data_bytes=available, minimum_data_bytes=minimum_data)
 
 

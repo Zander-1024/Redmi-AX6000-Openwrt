@@ -164,6 +164,18 @@ class MigrationTests(unittest.TestCase):
         self.assert_readonly()
 
     def test_bootloader_readback_failure_stops_before_fip_and_sysupgrade(self):
+        self.prepare_install()
+        # Default fixture never writes NAND: return original bytes for readback.
+        mtd = self.root / 'bin/mtd'
+        mtd.write_text(mtd.read_text() + 'if [ "$1" = dump ]; then cat "$2"; fi\n')
+        result = self.run_script('install', '--apply', '--backup-saved-off-router')
+        self.assertNotEqual(result.returncode, 0)
+        commands = self.log.read_text()
+        self.assertIn('回读不一致', result.stderr)
+        self.assertEqual(commands.count('mtd write'), 1)
+        self.assertNotIn('sysupgrade', commands)
+
+    def prepare_install(self):
         (self.root / 'tmp/sysinfo/board_name').write_text('xiaomi,redmi-router-ax6000-ubootmod\n')
         self.layout(self.parts[:5] + [(5, 'ubi', 0x580000, 0x7a80000)])
         (self.root / 'lib/modules/test/mtd-rw.ko').write_bytes(b'test')
@@ -171,12 +183,71 @@ class MigrationTests(unittest.TestCase):
         ubi.mkdir()
         for key, value in [('mtd_num', 5), ('avail_eraseblocks', 800), ('eraseblock_size', 126976)]:
             (ubi / key).write_text(str(value))
-        result = self.run_script('install', '--apply', '--backup-saved-off-router')
-        self.assertNotEqual(result.returncode, 0)
-        commands = self.log.read_text()
-        self.assertIn('回读不一致', result.stderr)
-        self.assertEqual(commands.count('mtd write'), 1)
-        self.assertNotIn('sysupgrade', commands)
+
+    def test_multidigit_stock_counter_and_invalid_values(self):
+        env = self.root / 'bin/fw_printenv'
+        text = env.read_text().replace('*) echo 8', '*) echo "${STOCK_FAILED:-8}"')
+        env.write_text(text)
+        for count, expected in [('113', 0), ('6', 0), ('5', 1), ('-1', 1), ('broken', 1)]:
+            with self.subTest(count=count):
+                self.env['STOCK_FAILED'] = count
+                result = self.run_script('check-stock')
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assert_readonly()
+
+    def test_nand_readback_skips_bad_blocks_and_rejects_short_or_failed_dump(self):
+        self.prepare_install()
+        meta = json.loads((self.bundle / 'bundle.json').read_text())
+        # Cross a PEB boundary so a bad block at the final partial block is tested.
+        for key in ('bl2', 'fip'):
+            (self.bundle / meta[key]).write_bytes(b'bootloader' * 14001)
+        self.checksums(self.bundle)
+        mtd = self.root / 'bin/mtd'
+        mtd.write_text('''#!/usr/bin/env python3
+import os, sys
+from pathlib import Path
+args = sys.argv[1:]
+with open(os.environ['TEST_MUTATIONS'], 'a') as log:
+    log.write('mtd ' + ' '.join(args) + '\\n')
+peb = 131072
+bad = int(os.environ.get('TEST_BAD_BLOCK', '0'))
+if args[0] == 'write':
+    payload = Path(args[1]).read_bytes()
+    target = Path(args[2])
+    physical = bytearray(target.stat().st_size)
+    for offset in range(0, len(physical), peb):
+        if offset // peb == bad:
+            physical[offset:offset + peb] = b'X' * peb
+            continue
+        chunk, payload = payload[:peb], payload[peb:]
+        physical[offset:offset + len(chunk)] = chunk
+    assert not payload
+    target.write_bytes(physical)
+elif args[0] == 'dump':
+    if os.environ.get('TEST_DUMP_MODE') == 'fail':
+        sys.exit(9)
+    data = Path(args[1]).read_bytes()
+    logical = b''.join(data[o:o + peb] for o in range(0, len(data), peb) if o // peb != bad)
+    if os.environ.get('TEST_DUMP_MODE') == 'short':
+        logical = logical[:17]
+    sys.stdout.buffer.write(logical)
+''')
+        for bad, mode, expected in [('0', '', 0), ('1', '', 0), ('0', 'short', 1), ('0', 'fail', 1)]:
+            with self.subTest(bad=bad, mode=mode):
+                self.log.unlink(missing_ok=True)
+                self.env.update(TEST_BAD_BLOCK=bad, TEST_DUMP_MODE=mode)
+                result = self.run_script('install', '--apply', '--backup-saved-off-router')
+                self.assertEqual(result.returncode, expected, result.stderr)
+                commands = self.log.read_text()
+                if expected == 0:
+                    self.assertEqual(commands.count('mtd write'), 2)
+                    self.assertIn('sysupgrade -n', commands)
+                    payload = (self.bundle / meta['bl2']).read_bytes()
+                    # The previous raw-head verification would reject this NAND.
+                    self.assertNotEqual((self.root / 'dev/mtd8').read_bytes()[:len(payload)], payload)
+                else:
+                    self.assertEqual(commands.count('mtd write'), 1)
+                    self.assertNotIn('sysupgrade -n', commands)
 
     def test_recover_writes_only_sysupgrade(self):
         (self.root / 'tmp/sysinfo/board_name').write_text('xiaomi,redmi-router-ax6000-ubootmod\n')
