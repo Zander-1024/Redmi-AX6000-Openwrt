@@ -5,6 +5,10 @@ OpenWrt 官方 `xiaomi_redmi-router-ax6000-ubootmod`。不适用于 Qualcomm 小
 也不适用于 hanwckf、闭源 Web U-Boot 或其他扩容方案。迁移会清空 OpenWrt 配置和数据，并替换 BL2/FIP。
 准备阶段可以自动检查；实际刷写尚需本机验收，不把脚本测试视为已经在路由器上验证。
 
+官方文档已保存为[仓库快照与逐项核对说明](https://github.com/Zander-1024/Redmi-AX6000-Openwrt/tree/main/docs/reference/openwrt)，附完整原文、U-Boot 安装章节、
+来源与许可。主流程与官方一致；环境卷大小、恢复卷大小和管理地址等项目差异在那里单独说明。
+其中记录的 NAND 坏块回读和容量模型问题仍待修复，尚不能据此推荐实机迁移。
+
 ## 空间变化与选择
 
 | 布局 | 内核与系统分区 | 发布容量条件 |
@@ -118,7 +122,7 @@ sh /tmp/migration/ax6000-migrate.sh install /tmp/migration /tmp/ax6000-stock-bac
 `install` 必须在 RAM initramfs 中执行，没有挂载 `/rom`、`/overlay` 或 UBIFS。
 它先校验所有文件、原始备份和本机 Factory/Bdata，运行正式镜像 `sysupgrade -T`，随后：
 
-1. 显式加载本镜像自带的 `mtd-rw`，清理 pstore 崩溃记录。
+1. 确认 pstore 已挂载并清理崩溃记录，再显式加载本镜像自带的 `mtd-rw`。
 2. 重建扩容后的 UBI，创建两个 1 MiB 环境卷和 16 MiB NAND recovery 卷，写入精简 recovery。
 3. 核对实际可用 UBI 块能容纳正式 FIT，并至少保留 16 MiB 逻辑数据容量。
 4. 写入匹配的 BL2 / FIP，分别回读校验，最后执行 `sysupgrade -n` 安装正式 ubootmod 固件并重启。
@@ -162,8 +166,11 @@ sh /tmp/migration/ax6000-migrate.sh check-recover /tmp/migration
 sh /tmp/migration/ax6000-migrate.sh recover /tmp/migration --apply
 ```
 
-`recover` 仅在官方 ubootmod RAM 系统中校验并执行 `sysupgrade -n`，会丢弃旧配置，
+`recover` 仅在官方 ubootmod RAM 系统中校验、清理 pstore 后执行 `sysupgrade -n`，会丢弃旧配置，
 不重建 UBI、不写 BL2/FIP、不修改 Factory/Bdata。正式固件再次启动后重新设置。
+锁定 U-Boot 在发现 pstore 崩溃记录时会优先启动恢复系统；只重刷固件而保留记录，热重启后仍可能回到 recovery。
+需要保留诊断信息时，先把 `/sys/fs/pstore` 中的记录复制到电脑。`check-recover` 不删除记录；
+实际恢复要求 pstore 已挂载，清理失败即停止，不继续升级。
 
 ## 能否退回 stock 或小米原厂
 

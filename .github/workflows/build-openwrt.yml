@@ -2,6 +2,8 @@
 name: Build OpenWrt
 
 on:
+  push:
+    tags: ['build-ax6000-*']
   repository_dispatch:
     types: [Source Code Update]
   workflow_dispatch:

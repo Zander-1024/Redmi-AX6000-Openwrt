@@ -11,6 +11,7 @@ if [[ "$mode" == package ]]; then
     exit
 fi
 if [[ "$mode" == check ]]; then
+    python3 "$src/scripts/openwrt-docs.py" verify
     LC_ALL=C.UTF-8 shellcheck --severity=warning "$src/diy-part1.sh" "$src"/scripts/*.sh "$src"/files/etc/uci-defaults/*
     python3 -m unittest discover -s "$src/tests" -v
     exit

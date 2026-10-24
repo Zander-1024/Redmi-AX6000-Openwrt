@@ -19,11 +19,12 @@ class MigrationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        for name in ('proc', 'sys/class/mtd', 'sys/class/ubi', 'dev', 'lib/modules/test', 'tmp/sysinfo', 'bin'):
+        for name in ('proc', 'sys/class/mtd', 'sys/class/ubi', 'sys/fs/pstore', 'dev', 'lib/modules/test', 'tmp/sysinfo', 'bin'):
             (self.root / name).mkdir(parents=True, exist_ok=True)
         (self.root / 'tmp/sysinfo/board_name').write_text('xiaomi,redmi-router-ax6000-stock\n')
         (self.root / 'proc/meminfo').write_text('MemAvailable: 262144 kB\n')
-        (self.root / 'proc/mounts').write_text('rootfs / rootfs rw 0 0\n')
+        (self.root / 'proc/mounts').write_text(
+            f'rootfs / rootfs rw 0 0\npstore {self.root}/sys/fs/pstore pstore rw 0 0\n')
         (self.root / 'proc/modules').write_text('')
         # Intentionally shuffled MTD numbers; a hardcoded mtd7 must fail tests.
         self.parts = [
@@ -114,11 +115,14 @@ class MigrationTests(unittest.TestCase):
         self.assert_readonly()
 
     def test_stage_formats_only_resolved_kernel_partition(self):
+        crash = self.root / 'sys/fs/pstore/dmesg-ramoops-0'
+        crash.write_text('stock diagnostic record')
         result = self.run_script('stage-stock', '--apply', '--backup-saved-off-router')
         self.assertEqual(result.returncode, 0, result.stderr)
         commands = self.log.read_text().splitlines()
         self.assertEqual(len(commands), 1)
         self.assertIn('/dev/mtd5 -y -f ', commands[0])
+        self.assertTrue(crash.exists())
 
     def test_format_failure_does_not_report_success_or_reboot(self):
         self.env['FAIL_FORMAT'] = '23'
@@ -151,10 +155,12 @@ class MigrationTests(unittest.TestCase):
         (self.root / 'proc/mounts').write_text('/dev/root / squashfs ro 0 0\n')
         self.assertNotEqual(self.run_script('install', '--apply', '--backup-saved-off-router').returncode, 0)
         self.assert_readonly()
-        (self.root / 'proc/mounts').write_text('rootfs / rootfs rw 0 0\n')
+        (self.root / 'proc/mounts').write_text(
+            f'rootfs / rootfs rw 0 0\npstore {self.root}/sys/fs/pstore pstore rw 0 0\n')
         self.env['FAIL_VALIDATE'] = '17'
         result = self.run_script('install', '--apply', '--backup-saved-off-router')
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn('正式固件未通过 sysupgrade 检查', result.stderr)
         self.assert_readonly()
 
     def test_bootloader_readback_failure_stops_before_fip_and_sysupgrade(self):
@@ -179,6 +185,63 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.log.read_text().splitlines()), 1)
         self.assertTrue(self.log.read_text().startswith('sysupgrade -n '))
+
+    def prepare_recovery_with_crash(self):
+        (self.root / 'tmp/sysinfo/board_name').write_text('xiaomi,redmi-router-ax6000-ubootmod\n')
+        self.layout(self.parts[:5] + [(5, 'ubi', 0x580000, 0x7a80000)])
+        crash = self.root / 'sys/fs/pstore/dmesg-ramoops-0'
+        crash.write_text('old kernel panic')
+        self.env['TEST_CRASH_RECORD'] = str(crash)
+        return crash
+
+    def test_recovery_clears_crash_before_sysupgrade(self):
+        crash = self.prepare_recovery_with_crash()
+        upgrade = self.root / 'bin/sysupgrade'
+        upgrade.write_text(upgrade.read_text() + '\n[ ! -e "$TEST_CRASH_RECORD" ] || exit 91\n')
+        result = self.run_script('recover', '--apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(crash.exists())
+        self.assertEqual(len(self.log.read_text().splitlines()), 1)
+        self.assertTrue(self.log.read_text().startswith('sysupgrade -n '))
+
+    def test_recovery_checks_and_missing_confirmation_preserve_crash(self):
+        crash = self.prepare_recovery_with_crash()
+        for action, expected in [('check-recover', 0), ('recover', 1)]:
+            with self.subTest(action=action):
+                result = self.run_script(action)
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assertTrue(crash.exists())
+                self.assert_readonly()
+
+    def test_invalid_recovery_image_preserves_crash(self):
+        crash = self.prepare_recovery_with_crash()
+        self.env['FAIL_VALIDATE'] = '17'
+        self.assertNotEqual(self.run_script('recover', '--apply').returncode, 0)
+        self.assertTrue(crash.exists())
+        self.assert_readonly()
+
+    def test_unmounted_pstore_rejects_recovery(self):
+        crash = self.prepare_recovery_with_crash()
+        (self.root / 'proc/mounts').write_text('rootfs / rootfs rw 0 0\n')
+        result = self.run_script('recover', '--apply')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(crash.exists())
+        self.assert_readonly()
+
+    def test_failed_pstore_cleanup_stops_install_and_recovery(self):
+        crash = self.prepare_recovery_with_crash()
+        (self.root / 'lib/modules/test/mtd-rw.ko').write_bytes(b'test')
+        remove = self.root / 'bin/rm'
+        remove.write_text('#!/bin/sh\nexit 19\n')
+        remove.chmod(0o755)
+        for action, flags in [('recover', ('--apply',)),
+                              ('install', ('--apply', '--backup-saved-off-router'))]:
+            with self.subTest(action=action):
+                result = self.run_script(action, *flags)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('pstore', result.stderr)
+                self.assertTrue(crash.exists())
+                self.assert_readonly()
 
     def test_low_memory_refuses_before_writes(self):
         (self.root / 'proc/meminfo').write_text('MemAvailable: 131071 kB\n')

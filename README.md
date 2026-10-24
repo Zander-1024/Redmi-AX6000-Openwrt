@@ -4,6 +4,7 @@
 `mediatek/filogic/xiaomi_redmi-router-ax6000-stock`，同时按用户选择额外构建官方
 `xiaomi_redmi-router-ax6000-ubootmod` 和精简迁移恢复镜像。两个布局的正式升级镜像不能互刷。
 迁移、备份与 TFTP 救援见 [迁移与恢复指导](docs/ubootmod.md)，不在设备上自动执行迁移。
+官方机型原文、U-Boot 章节及与锁定源码的差异核对见 [官方文档快照](docs/reference/openwrt/README.md)。
 家庭嵌入式设备的资源、网络和维护原则见 [`AGENTS.md`](AGENTS.md)。
 
 ## 版本与依赖
@@ -69,6 +70,17 @@ nlbwmon 已统计一次实际转发流量。**这不是整机、满库、满并�
 3. 构建使用 `ubuntu-24.04`，checkout release 后校验 SHA；所有 Actions 固定完整提交。
 4. 两种正式固件及精简 recovery 的编译、manifest、校验和及独立分区容量检查全部成功后，才上传产物。
    Release 先上传草稿，全部成功后公开；失败不会发布固件或清理旧 Release。
+
+也可显式推送 `build-ax6000-*` tag 触发同一构建，适用于已有 Git 推送权限但未配置 GitHub API 登录的环境：
+
+```sh
+build_tag="build-ax6000-$(date -u +%Y%m%dT%H%M%SZ)"
+git tag "$build_tag" HEAD
+git push origin "$build_tag"
+```
+
+tag 固定本次构建的配置提交；先提交并推送要构建的修改，再创建 tag。普通分支推送不触发此工作流。
+该入口同样在全部门禁通过后自动发布 Release，并执行既有的三份 Release 保留策略。
 
 Artifact / Release 分发三个独立归档：stock 正式固件、ubootmod 正式固件、迁移与恢复包。
 迁移包中的精简 recovery 单独编译，不把完整插件 initramfs 塞入 stock 的 30 MiB 分区。

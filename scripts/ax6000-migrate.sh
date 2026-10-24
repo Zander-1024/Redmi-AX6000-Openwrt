@@ -155,6 +155,8 @@ ram_boot() {
     root_type=$(awk '$2 == "/" { print $3; exit }' /proc/mounts)
     case "$root_type" in rootfs|ramfs|tmpfs) ;; *) fail "必须从 initramfs 启动，当前 / 为 $root_type";; esac
     awk '$2 == "/overlay" || $2 == "/rom" || $3 == "ubifs" { bad=1 } END { exit bad }' /proc/mounts || fail '检测到持久化文件系统仍被挂载'
+    # An unmounted directory cannot prove that persistent crash records are empty.
+    awk '$2 == "/sys/fs/pstore" && $3 == "pstore" { found=1 } END { exit !found }' /proc/mounts || fail 'pstore 未挂载，无法检查并清除崩溃记录'
 }
 ubi_for_mtd() {
     for path in /sys/class/ubi/ubi[0-9]*; do
@@ -206,12 +208,15 @@ if [ "$action" = stage-stock ]; then
     echo '第一阶段完成。不要重跑；手动 reboot，重新上传 bundle 和原始备份，然后运行 check-install。'
     exit 0
 fi
+# Official U-Boot tests pstore before booting production. Clear old crash records
+# for both install and recover, after validation/confirmation and before writes.
+# Inspection commands and stage-stock must leave diagnostic records intact.
+for crash_file in /sys/fs/pstore/*; do
+    [ ! -f "$crash_file" ] || rm -f "$crash_file" || fail "无法清理 pstore 崩溃记录：$crash_file"
+done
 if [ "$action" = install ]; then
     # The module is never autoloaded by this project or used outside RAM install.
     if ! grep -q '^mtd_rw ' /proc/modules; then insmod "$module" i_want_a_brick=1; fi
-    for crash_file in /sys/fs/pstore/*; do
-        [ ! -f "$crash_file" ] || rm -f "$crash_file"
-    done
     attached=$(ubi_for_mtd "$ubipart")
     [ -z "$attached" ] || ubidetach -p "/dev/$ubipart"
     ubiformat "/dev/$ubipart" -y

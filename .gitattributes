@@ -1,0 +1,2 @@
+# Preserve the official HTTP export byte-for-byte, including upstream whitespace.
+docs/reference/openwrt/*.dokuwiki -text -whitespace

@@ -1,0 +1,15 @@
+{
+  "title": "Xiaomi Redmi AX6000",
+  "source_url": "https://openwrt.org/toh/xiaomi/redmi_ax6000",
+  "export_url": "https://openwrt.org/toh/xiaomi/redmi_ax6000?do=export_raw",
+  "history_url": "https://openwrt.org/toh/xiaomi/redmi_ax6000?do=revisions",
+  "retrieved_at_utc": "2026-10-24T11:23:32.111775+00:00",
+  "upstream_last_modified_display": "2026/09/18 09:07",
+  "upstream_timezone": "Not specified by the page display",
+  "attribution": "OpenWrt Wiki contributors",
+  "license": "CC-BY-SA-4.0",
+  "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+  "sha256": "783662e9cfa53d3ef9f29db88be94618287a8c120c8e3d2fe3e47ba7d83bbac5",
+  "bytes": 231229,
+  "raw_changes": "None; exact HTTP export response body"
+}
